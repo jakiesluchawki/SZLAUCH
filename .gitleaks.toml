@@ -1,0 +1,16 @@
+title = "SZLAUCH secret scanning"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic identifiers used by parser self-tests"
+regexTarget = "match"
+regexes = [
+  '''appearance-v2\.intensity''',
+  '''appearance-v2\.opacity''',
+  '''AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB''',
+  '''CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD''',
+  '''EEEEEEEE-7777-8888-9999-FFFFFFFFFFFF''',
+  '''11111111-1111-1111-1111-111111111111'''
+]

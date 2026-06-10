@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build universal macOS app
+        run: ./scripts/build-macos-app.sh
+
+      - name: Run self-tests
+        run: |
+          app="Szlauch.app/Contents/MacOS/Szlauch"
+          "$app" --self-test-vpn
+          "$app" --self-test-sleep
+          "$app" --self-test-rate-format
+          "$app" --self-test-network
+          "$app" --self-test-hotspot-history
+          "$app" --self-test-personal-hotspot
+          "$app" --self-test-wifi-selection
+          "$app" --self-test-navigation
+          "$app" --self-test-weather
+          "$app" --self-test-runtime
+          "$app" --self-test-theme
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan repository for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

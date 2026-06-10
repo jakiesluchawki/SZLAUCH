@@ -1,0 +1,17 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.mobileprovision
+*.xcarchive
+DerivedData/
+.build/
+.build-dmg/
+.build-tools/
+Pulse Bar.app/
+Szlauch.app/
+dist/

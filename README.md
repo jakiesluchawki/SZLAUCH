@@ -6,9 +6,12 @@ Lekka aplikacja menu bar dla macOS. Pokazuje bieżące tempo wysyłania i pobier
 
 1. Pobierz najnowszy plik `Szlauch-*.dmg` z sekcji GitHub Releases.
 2. Otwórz obraz i przeciągnij `Szlauch.app` do `Applications`.
-3. Przy pierwszym uruchomieniu wersji bez podpisu Apple macOS może ją zablokować. Wtedy otwórz `Ustawienia systemowe` > `Prywatność i ochrona` i przy komunikacie o `Szlauch` wybierz `Otwórz mimo to`.
+3. Uruchom `Szlauch` z folderu `Applications`.
 
-Pobieraj aplikację tylko z wydania opublikowanego w tym repozytorium. Publiczne wydania bez certyfikatu Apple Developer są bezpłatne, ale wymagają powyższego jednorazowego potwierdzenia.
+Oficjalne wydania są podpisane certyfikatem `Developer ID Application` i
+notaryzowane przez Apple, dlatego nie wymagają obchodzenia zabezpieczeń
+Gatekeepera. Pobieraj aplikację tylko z wydania opublikowanego w tym
+repozytorium.
 
 Aktualizacja z wcześniejszego prototypu `Pulse Bar` jednorazowo przenosi lokalne ustawienia, wybrany profil VPN i historię transferu do aplikacji `Szlauch`.
 
@@ -81,6 +84,14 @@ SZLAUCH_NOTARY_PROFILE="SzlauchNotary" \
 ```
 
 Bez `Developer ID Application` skrypt nadal tworzy sprawny DMG do lokalnych testów, ale macOS może zablokować aplikację pobraną przez inną osobę.
+
+Po zaakceptowaniu zgłoszenia przez Apple skrypt automatycznie dołącza ticket
+notaryzacji do DMG. Finalny plik można sprawdzić poleceniami:
+
+```bash
+xcrun stapler validate dist/Szlauch-*.dmg
+spctl --assess --type open --context context:primary-signature --verbose=4 dist/Szlauch-*.dmg
+```
 
 ## Prywatność i uprawnienia
 

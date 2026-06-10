@@ -63,6 +63,20 @@ MOUNTED=1
 
 # macOS Tahoe ignores the legacy background alias emitted by dmgbuild. Let Finder
 # create its own native reference, then compress that configured writable image.
+FINDER_READY=0
+for attempt in {1..20}; do
+  if osascript -e "tell application \"Finder\" to exists disk \"$VOLUME_NAME\"" 2>/dev/null | grep -q true; then
+    FINDER_READY=1
+    break
+  fi
+  sleep 0.25
+done
+
+if [[ "$FINDER_READY" != "1" ]]; then
+  echo "Finder nie zarejestrował woluminu $VOLUME_NAME po zamontowaniu obrazu." >&2
+  exit 1
+fi
+
 osascript <<APPLESCRIPT
 tell application "Finder"
   tell disk "$VOLUME_NAME"

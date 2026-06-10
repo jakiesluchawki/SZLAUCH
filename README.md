@@ -19,6 +19,9 @@ Aktualizacja z wcześniejszego prototypu `Pulse Bar` jednorazowo przenosi lokaln
 
 - Dwie linie transferu w menu barze jak w iStat: upload u góry, download pod spodem, z ostatniej pełnej 1-sekundowej próbki; jednostka nie przeskakuje przy zmianie ruchu.
 - Natywny wygląd macOS 26 z Liquid Glass, dynamicznym kolorem akcentu i systemową typografią.
+- Ciemny kontrast panelu pozostaje czytelny także przy jasnym trybie macOS;
+  pierwsze uruchomienie zaczyna od 100% opacity, którą można później zmniejszyć
+  pionowym gestem na nazwie `Szlauch`.
 - Stały rozmiar panelu: szczegóły przenikają w miejscu, bez resize'u okna ani przeskoku strzałki przy kliknięciu.
 - Dyskretna zębatka obok częstotliwości odczytu grupuje ustawienia użytkowe, w tym start przy logowaniu i zakończenie aplikacji, bez zajmowania miejsca pod danymi.
 - Przy pierwszym uruchomieniu panel otwiera się raz automatycznie, aby potwierdzić, że aplikacja menu bar działa mimo braku ikony w Docku.

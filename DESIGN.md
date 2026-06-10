@@ -43,6 +43,9 @@
 
 - System font and monospaced digits for changing measurements.
 - Compact supporting labels should remain at least 8.5 pt.
+- The instrument panel always uses its authored dark appearance, even when
+  macOS is in Light Mode; system appearance must never turn labels black on
+  the dark Zgrywa palettes.
 - Text and glyphs use system foreground colors; data traces use a sufficiently
   visible stroke even while the panel tint is personalised.
 - Window opacity has a readability floor of 62 percent.
@@ -78,5 +81,7 @@
   never compete with measurements at the bottom of the panel.
 - Clicking `Szlauch` rotates the palette; horizontal dragging changes color
   intensity and vertical dragging changes panel opacity.
+- A new installation and the first launch after the contrast migration start
+  at 100 percent window opacity. Later user adjustments remain persistent.
 - System authorization is requested only at the point of action, with plain
   language before the sleep permission dialog and a visible removal command.

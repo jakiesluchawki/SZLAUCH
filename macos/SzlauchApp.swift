@@ -230,12 +230,43 @@ private struct PulseTheme: Equatable {
     var outbound: Color { variant.upload.opacity(semanticIntensity) }
 }
 
+private enum AppearanceDefaultsMigration {
+    private static let completedKey = "migration-v2.full-opacity-dark-panel"
+
+    static func run(defaults: UserDefaults = .standard) {
+        guard !defaults.bool(forKey: completedKey) else { return }
+        defaults.set(PulseTheme.defaultOpacity, forKey: PulseTheme.opacityStorageKey)
+        defaults.set(true, forKey: completedKey)
+    }
+
+    static func selfTestFailures() -> [String] {
+        let suiteName = "app.szlauch.macos.tests.appearance.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return ["nie udało się utworzyć izolowanych ustawień testowych"]
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(PulseTheme.minimumOpacity, forKey: PulseTheme.opacityStorageKey)
+        run(defaults: defaults)
+        if defaults.double(forKey: PulseTheme.opacityStorageKey) != PulseTheme.defaultOpacity {
+            return ["pierwszy start nie przywraca pełnej opacity"]
+        }
+
+        defaults.set(0.78, forKey: PulseTheme.opacityStorageKey)
+        run(defaults: defaults)
+        if abs(defaults.double(forKey: PulseTheme.opacityStorageKey) - 0.78) > 0.001 {
+            return ["kolejny start nadpisuje świadomie wybraną opacity"]
+        }
+        return []
+    }
+}
+
 private enum Palette {
     static let background = Color.clear
     static var surface: Color { PulseTheme.selected.main.opacity(0.16) }
     static var soft: Color { PulseTheme.selected.cta.opacity(0.15) }
-    static let ink = Color.primary
-    static let muted = Color.secondary
+    static let ink = Color(hex: 0xF5F1FA)
+    static let muted = Color(hex: 0xC1B9C9)
     static var line: Color { PulseTheme.selected.light.opacity(0.16) }
     static var strong: Color { PulseTheme.selected.cta }
     static var action: Color { PulseTheme.selected.cta }
@@ -4178,12 +4209,14 @@ private struct SzlauchPanel: View {
                 mainPanel
             }
             .environment(\.pulseTheme, theme)
+            .environment(\.colorScheme, .dark)
             .background(PanelBackdrop(theme: theme))
             .background(WindowOpacityController(opacity: selectedOpacity).frame(width: 0, height: 0))
             .id(selectedTheme)
         } else {
             mainPanel
                 .environment(\.pulseTheme, theme)
+                .environment(\.colorScheme, .dark)
                 .background(PanelBackdrop(theme: theme))
                 .background(WindowOpacityController(opacity: selectedOpacity).frame(width: 0, height: 0))
                 .id(selectedTheme)
@@ -6860,6 +6893,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         LegacySettingsMigration.run()
         RetiredQuotaCleanup.run()
+        AppearanceDefaultsMigration.run()
 
         if CommandLine.arguments.contains("--unregister-login") {
             try? SMAppService.mainApp.unregister()
@@ -7021,7 +7055,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showPopover() {
         guard let button = statusItem.button, !popover.isShown else { return }
         model.panelDidOpen()
-        popover.contentViewController = NSHostingController(rootView: SzlauchPanel(model: model))
+        let controller = NSHostingController(rootView: SzlauchPanel(model: model))
+        controller.view.appearance = NSAppearance(named: .darkAqua)
+        popover.contentViewController = controller
         NSApp.activate(ignoringOtherApps: true)
         button.highlight(true)
         popover.show(relativeTo: popoverAnchorRect(for: button), of: button, preferredEdge: .minY)
@@ -7069,7 +7105,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         window.titlebarAppearsTransparent = true
         window.isOpaque = false
         window.backgroundColor = .clear
-        window.contentView = NSHostingView(rootView: SzlauchPanel(model: model))
+        let hostingView = NSHostingView(rootView: SzlauchPanel(model: model))
+        hostingView.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = hostingView
         window.center()
         window.makeKeyAndOrderFront(nil)
         previewWindow = window
@@ -7178,9 +7216,9 @@ if CommandLine.arguments.contains("--self-test-runtime") {
 }
 
 if CommandLine.arguments.contains("--self-test-theme") {
-    let failures = PulseTheme.selfTestFailures()
+    let failures = PulseTheme.selfTestFailures() + AppearanceDefaultsMigration.selfTestFailures()
     if failures.isEmpty {
-        print("Theme self-test: OK (Mech, Zatoka, Śliwka bez losowania)")
+        print("Theme self-test: OK (palety, ciemny kontrast i startowa opacity 100%)")
         exit(EXIT_SUCCESS)
     }
     failures.forEach { FileHandle.standardError.write(Data("Theme self-test: \($0)\n".utf8)) }

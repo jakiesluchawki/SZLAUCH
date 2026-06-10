@@ -51,36 +51,33 @@ hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null || true
 MOUNTED=0
 cleanup_layout_volume() {
   if [[ "$MOUNTED" == "1" ]]; then
-    osascript -e "tell application \"Finder\" to try to close container window of disk \"$VOLUME_NAME\" end try" 2>/dev/null || true
+    osascript -e "tell application \"Finder\" to try to close container window of (POSIX file \"$MOUNT_POINT\" as alias) end try" 2>/dev/null || true
     hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null || true
     MOUNTED=0
   fi
 }
 trap cleanup_layout_volume EXIT
 
-hdiutil attach -nobrowse -readwrite "$LAYOUT_DMG" >/dev/null
+hdiutil attach -nobrowse -readwrite -mountpoint "$MOUNT_POINT" "$LAYOUT_DMG" >/dev/null
 MOUNTED=1
 
 # macOS Tahoe ignores the legacy background alias emitted by dmgbuild. Let Finder
 # create its own native reference, then compress that configured writable image.
-FINDER_READY=0
-for attempt in {1..20}; do
-  if osascript -e "tell application \"Finder\" to exists disk \"$VOLUME_NAME\"" 2>/dev/null | grep -q true; then
-    FINDER_READY=1
-    break
-  fi
-  sleep 0.25
-done
-
-if [[ "$FINDER_READY" != "1" ]]; then
-  echo "Finder nie zarejestrował woluminu $VOLUME_NAME po zamontowaniu obrazu." >&2
+if [[ ! -d "$MOUNT_POINT" ]]; then
+  echo "Obraz DMG nie został zamontowany w $MOUNT_POINT." >&2
   exit 1
 fi
 
 osascript <<APPLESCRIPT
 tell application "Finder"
+  set targetFolder to (POSIX file "$MOUNT_POINT" as alias)
+  open targetFolder
+  repeat 40 times
+    if exists disk "$VOLUME_NAME" then exit repeat
+    delay 0.25
+  end repeat
+  if not (exists disk "$VOLUME_NAME") then error "Finder nie zarejestrował woluminu $VOLUME_NAME."
   tell disk "$VOLUME_NAME"
-    open
     set w to container window
     set current view of w to icon view
     set toolbar visible of w to false

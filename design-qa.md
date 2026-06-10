@@ -1,4 +1,4 @@
-# Design QA: Szlauch 0.3.11
+# Design QA: Szlauch 0.3.12
 
 ## Reference
 
@@ -86,6 +86,11 @@ inside the fixed panel).
 - Resolved P2: the Wi-Fi glyph communicated status but offered no native
   escape hatch. It now opens the macOS Wi-Fi settings pane directly from both
   dashboard and expanded network states.
+- Resolved P1: Light Mode could make semantic system text black while the
+  authored Szlauch surface remained dark. The panel now owns a consistent
+  dark appearance and explicit light foreground tokens. Version 0.3.12 also
+  performs a one-time reset to 100 percent window opacity; later user changes
+  remain persistent.
 - Resolved P1: entering transfer detail swapped the spatial order of download
   and upload beneath the cursor. Detail now matches the dashboard.
 - Resolved P2: returning from process/transfer/Wi-Fi/hotspot detail relied on
@@ -187,5 +192,8 @@ inside the fixed panel).
 - App release tests cover VPN, sleep, fixed rate units, aggregate network
   measurement, Wi-Fi selection, hotspot history, personal hotspot preference,
   detail navigation, read-only preview mode and themes.
+- Manually verified the 0.3.12 migration by starting from a stored 62 percent
+  opacity value: the panel opened at 100 percent and recorded the migration,
+  matching the intended first-run behavior.
 
 final result: passed

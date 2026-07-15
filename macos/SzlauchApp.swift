@@ -663,6 +663,33 @@ private enum WiFiIdentity {
     }
 }
 
+private enum WiFiSettingsDestination {
+    static let destinations = [
+        "x-apple.systempreferences:com.apple.wifi-settings-extension",
+        "x-apple.systempreferences:com.apple.Network-Settings.extension",
+        "x-apple.systempreferences:com.apple.preference.network"
+    ]
+
+    static func open() {
+        for destination in destinations {
+            guard let url = URL(string: destination) else { continue }
+            if NSWorkspace.shared.open(url) {
+                return
+            }
+        }
+    }
+
+    static func selfTestFailures() -> [String] {
+        guard destinations.first == "x-apple.systempreferences:com.apple.wifi-settings-extension" else {
+            return ["skrót nie prowadzi najpierw do panelu Wi-Fi macOS"]
+        }
+        if destinations.contains("x-apple.systempreferences:com.apple.WiFi-Settings.extension") {
+            return ["lista nadal zawiera nieaktualny identyfikator panelu Wi-Fi"]
+        }
+        return []
+    }
+}
+
 private struct CPUCounter {
     let active: UInt64
     let total: UInt64
@@ -3369,16 +3396,7 @@ private final class PulseModel: ObservableObject {
     }
 
     func openWiFiSettings() {
-        let destinations = [
-            "x-apple.systempreferences:com.apple.WiFi-Settings.extension",
-            "x-apple.systempreferences:com.apple.preference.network?Wi-Fi"
-        ]
-        for destination in destinations {
-            guard let url = URL(string: destination) else { continue }
-            if NSWorkspace.shared.open(url) {
-                return
-            }
-        }
+        WiFiSettingsDestination.open()
     }
 
     private func scheduleWiFiAuthorizationFallback() {
@@ -7176,9 +7194,9 @@ if CommandLine.arguments.contains("--self-test-personal-hotspot") {
 }
 
 if CommandLine.arguments.contains("--self-test-wifi-selection") {
-    let failures = WiFiIdentity.selfTestFailures()
+    let failures = WiFiIdentity.selfTestFailures() + WiFiSettingsDestination.selfTestFailures()
     if failures.isEmpty {
-        print("Wi-Fi selection self-test: OK (aktywna sieć i nazwy SSID)")
+        print("Wi-Fi selection self-test: OK (aktywna sieć, nazwy SSID i panel ustawień)")
         exit(EXIT_SUCCESS)
     }
     failures.forEach { FileHandle.standardError.write(Data("Wi-Fi selection self-test: \($0)\n".utf8)) }

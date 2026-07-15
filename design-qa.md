@@ -1,4 +1,4 @@
-# Design QA: Szlauch 0.3.12
+# Design QA: Szlauch 0.3.13
 
 ## Reference
 
@@ -86,6 +86,10 @@ inside the fixed panel).
 - Resolved P2: the Wi-Fi glyph communicated status but offered no native
   escape hatch. It now opens the macOS Wi-Fi settings pane directly from both
   dashboard and expanded network states.
+- Resolved P1: macOS 26.5 replaced the former Wi-Fi settings identifier with
+  `com.apple.wifi-settings-extension`. The glyph now targets that exact panel
+  first, with Network and the legacy preference pane retained only as
+  compatibility fallbacks.
 - Resolved P1: Light Mode could make semantic system text black while the
   authored Szlauch surface remained dark. The panel now owns a consistent
   dark appearance and explicit light foreground tokens. Version 0.3.12 also

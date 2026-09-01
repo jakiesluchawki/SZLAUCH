@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CoreText
 import CoreLocation
 import CoreWLAN
 import Darwin
@@ -8,6 +9,47 @@ import Network
 import ServiceManagement
 import SwiftUI
 import SystemConfiguration
+
+private enum BrandFonts {
+    static let names = ["Romie-Regular", "Roobert-Regular", "Roobert-Bold"]
+
+    static func register(in bundle: Bundle = .main) {
+        for name in names {
+            guard let url = bundle.url(forResource: name, withExtension: "otf", subdirectory: "Fonts") else { continue }
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }
+    }
+
+    static func interface(size: CGFloat, bold: Bool = false) -> NSFont {
+        NSFont(name: bold ? "Roobert-Bold" : "Roobert-Regular", size: size)
+            ?? NSFont.systemFont(ofSize: size, weight: bold ? .semibold : .regular)
+    }
+
+    static func heading(_ size: CGFloat) -> Font {
+        if let font = NSFont(name: "Romie-Regular", size: size) { return Font(font) }
+        return .system(size: size, weight: .regular, design: .serif)
+    }
+
+    static func selfTestFailures(requireBundled: Bool) -> [String] {
+        var failures: [String] = []
+        for name in names {
+            let url = Bundle.main.url(forResource: name, withExtension: "otf", subdirectory: "Fonts")
+            if requireBundled && url == nil { failures.append("brak fontu w aplikacji: \(name)") }
+            if url != nil && NSFont(name: name, size: 12) == nil {
+                failures.append("font nie został zarejestrowany: \(name)")
+            }
+        }
+        if interface(size: 12).pointSize != 12 { failures.append("nieprawidłowy rozmiar fontu interfejsu") }
+        return failures
+    }
+}
+
+private extension Font {
+    static func brand(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
+        if design == .monospaced { return .system(size: max(9, size), weight: weight, design: design) }
+        return Font(BrandFonts.interface(size: max(9.5, size), bold: weight == .bold || weight == .semibold))
+    }
+}
 
 private enum LegacySettingsMigration {
     private static let completedKey = "migration-v1.pulse-bar-settings"
@@ -46,6 +88,8 @@ private enum RetiredQuotaCleanup {
 }
 
 private enum RuntimeMode {
+    static var isSnapshot: Bool { CommandLine.arguments.contains("--snapshot") }
+
     static var isPreview: Bool {
         CommandLine.arguments.contains("--preview-window")
     }
@@ -55,7 +99,8 @@ private enum RuntimeMode {
     }
 
     static func allowsPersistentMeasurements(arguments: [String]) -> Bool {
-        !arguments.contains("--preview-window")
+        !arguments.contains("--preview-window") && !arguments.contains("--snapshot")
+            && !arguments.contains(where: { $0.hasPrefix("--self-test-") })
     }
 
     static func selfTestFailures() -> [String] {
@@ -220,7 +265,7 @@ private struct PulseTheme: Equatable {
         PulseTheme(variant: variant.next, intensity: intensity)
     }
 
-    private var semanticIntensity: Double { max(intensity, 0.72) }
+    private var semanticIntensity: Double { max(intensity, 0.92) }
 
     var foundation: Color { variant.foundation }
     var main: Color { variant.surface.opacity(intensity) }
@@ -263,11 +308,11 @@ private enum AppearanceDefaultsMigration {
 
 private enum Palette {
     static let background = Color.clear
-    static var surface: Color { PulseTheme.selected.main.opacity(0.16) }
+    static var surface: Color { Color.white.opacity(0.035) }
     static var soft: Color { PulseTheme.selected.cta.opacity(0.15) }
-    static let ink = Color(hex: 0xF5F1FA)
+    static let ink = Color(hex: 0xF8F5EF)
     static let muted = Color(hex: 0xC1B9C9)
-    static var line: Color { PulseTheme.selected.light.opacity(0.16) }
+    static var line: Color { Color.white.opacity(0.12) }
     static var strong: Color { PulseTheme.selected.cta }
     static var action: Color { PulseTheme.selected.cta }
     static var metric: Color { PulseTheme.selected.cta }
@@ -396,7 +441,9 @@ private struct GlassSurface: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
+        if RuntimeMode.isSnapshot {
+            content.background(tone.backdrop(for: theme), in: RoundedRectangle(cornerRadius: radius))
+        } else if #available(macOS 26.0, *) {
             content
                 .background(
                     tone.backdrop(for: theme),
@@ -424,6 +471,7 @@ private struct GlassSurface: ViewModifier {
 
 private struct InstrumentSurface: ViewModifier {
     @Environment(\.pulseTheme) private var theme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     let radius: CGFloat
 
     private var backdrop: some View {
@@ -467,7 +515,10 @@ private struct InstrumentSurface: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
+        if reduceTransparency || RuntimeMode.isSnapshot {
+            content.background(theme.foundation, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .background(backdrop)
+        } else if #available(macOS 26.0, *) {
             content
                 .background(backdrop)
                 .overlay {
@@ -491,6 +542,11 @@ private struct InstrumentSurface: ViewModifier {
 }
 
 private extension View {
+    @ViewBuilder
+    func snapshotFallback<Label: View>(@ViewBuilder _ label: () -> Label) -> some View {
+        if RuntimeMode.isSnapshot { label() } else { self }
+    }
+
     func pulseGlass(
         radius: CGFloat = 14,
         tone: GlassTone = .light,
@@ -543,8 +599,9 @@ private struct PanelBackdrop: View {
 }
 
 private struct LinkCounter {
-    let incomingBytes: UInt32
-    let outgoingBytes: UInt32
+    let incomingBytes: UInt64
+    let outgoingBytes: UInt64
+    var interfaceIndex: UInt32 = 0
 }
 
 private struct InterfaceCounter {
@@ -695,6 +752,11 @@ private struct CPUCounter {
     let total: UInt64
 }
 
+private enum ProcessSort: String, CaseIterable {
+    case cpu = "CPU"
+    case memory = "RAM"
+}
+
 private struct ProcessUsage: Identifiable {
     let id: String
     let name: String
@@ -817,6 +879,7 @@ private struct TrafficBucket: Codable, Identifiable, Equatable {
     var hotspotUpload: UInt64 = 0
     var otherDownload: UInt64 = 0
     var otherUpload: UInt64 = 0
+    var isAggregate: Bool? = nil
 
     var id: Date { minute }
 
@@ -856,8 +919,15 @@ private struct TrafficBucket: Codable, Identifiable, Equatable {
     }
 }
 
+private struct HotspotReset: Codable {
+    let day: Date
+    let download: UInt64
+    let upload: UInt64
+}
+
 private struct TrafficHistoryState {
     let buckets: [TrafficBucket]
+    var hotspotReset: HotspotReset? = nil
 
     static let initial = TrafficHistoryState(buckets: [])
 
@@ -885,10 +955,18 @@ private struct TrafficHistoryState {
                   let tomorrow = calendar.date(byAdding: .day, value: 1, to: day) else {
                 return nil
             }
-            return HotspotDayUsage(
-                day: day,
-                totals: totals(for: .hotspot, from: day, through: tomorrow.addingTimeInterval(-0.001))
-            )
+            var values = totals(for: .hotspot, from: day, through: tomorrow.addingTimeInterval(-0.001))
+            if let reset = hotspotReset {
+                if day < reset.day {
+                    values = TrafficTotals()
+                } else if day == reset.day {
+                    values = TrafficTotals(
+                        download: values.download >= reset.download ? values.download - reset.download : 0,
+                        upload: values.upload >= reset.upload ? values.upload - reset.upload : 0
+                    )
+                }
+            }
+            return HotspotDayUsage(day: day, totals: values)
         }
     }
 }
@@ -987,8 +1065,8 @@ private struct TrafficWindow {
             let count = range.plotCount(at: now)
             var downloads = Array(repeating: 0.0, count: count)
             var uploads = Array(repeating: 0.0, count: count)
-            // Earlier hotspot totals are migrated as a midnight seed: count them, but do not fake a spike.
-            for bucket in matching where bucket.minute != start {
+            // Only explicitly marked day aggregates lack minute-level timing.
+            for bucket in matching where bucket.isAggregate != true {
                 let offset = max(0, bucket.minute.timeIntervalSince(start))
                 let index = min(count - 1, Int(offset / range.bucketDuration))
                 downloads[index] += Double(bucket.totalDownload) / range.bucketDuration
@@ -1047,6 +1125,11 @@ private struct ForecastHour: Identifiable {
     let windSpeed: Double
     let windGusts: Double?
     let weatherCode: Int
+    var precipitationStart: Date? = nil
+    var isDay: Bool = true
+
+    var rainStart: Date? { precipitationStart ?? date }
+    var rainEnd: Date? { rainStart?.addingTimeInterval(3600) }
 
     var shortTime: String {
         String(time.suffix(5))
@@ -1065,7 +1148,7 @@ private struct AirQualitySnapshot {
     let uvIndex: Double?
 
     var qualityLabel: String {
-        guard let europeanAQI else { return "czekam" }
+        guard let europeanAQI else { return "brak danych" }
         switch europeanAQI {
         case ...20: return "dobre"
         case 21...40: return "OK"
@@ -1188,6 +1271,15 @@ private struct WeatherState {
     let outlook: String
     let source: WeatherSource
     var fallbackFrom: WeatherSource? = nil
+    var fetchedAt: Date? = nil
+    var isDay: Bool = true
+    var refreshFailed: Bool = false
+
+    func isStale(now: Date = Date()) -> Bool {
+        guard mode == .ready else { return false }
+        return refreshFailed || now.timeIntervalSince(fetchedAt ?? .distantPast) > 1800
+            || (hours.last?.date.map { $0 < now } ?? true)
+    }
 
     static func loading(source: WeatherSource, place: WeatherPlace? = nil) -> WeatherState {
         WeatherState(
@@ -1248,7 +1340,10 @@ private struct WeatherState {
             hours: hours,
             outlook: outlook,
             source: source,
-            fallbackFrom: fallbackFrom
+            fallbackFrom: fallbackFrom,
+            fetchedAt: fetchedAt,
+            isDay: isDay,
+            refreshFailed: refreshFailed
         )
     }
 }
@@ -1354,26 +1449,91 @@ private enum ActionResult {
 }
 
 private enum CommandRunner {
-    static func run(_ executable: String, _ arguments: [String]) -> CommandOutput {
+    static func run(_ executable: String, _ arguments: [String], timeout: TimeInterval = 12) -> CommandOutput {
         let process = Process()
         let output = Pipe()
-        let error = Pipe()
+        let errors = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.standardOutput = output
-        process.standardError = error
+        process.standardError = errors
 
         do {
             try process.run()
-            process.waitUntilExit()
-            return CommandOutput(
-                stdout: String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
-                stderr: String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
-                exitCode: process.terminationStatus
-            )
         } catch {
             return CommandOutput(stdout: "", stderr: error.localizedDescription, exitCode: -1)
         }
+        output.fileHandleForWriting.closeFile()
+        errors.fileHandleForWriting.closeFile()
+        defer {
+            output.fileHandleForReading.closeFile()
+            errors.fileHandleForReading.closeFile()
+        }
+        let descriptors = [output.fileHandleForReading.fileDescriptor, errors.fileHandleForReading.fileDescriptor]
+        for descriptor in descriptors { _ = fcntl(descriptor, F_SETFL, O_NONBLOCK) }
+        var captured = [Data(), Data()]
+        var finished = [false, false]
+        var buffer = [UInt8](repeating: 0, count: 16_384)
+        let deadline = ProcessInfo.processInfo.systemUptime + max(timeout, 0.01)
+        var exitedAt: TimeInterval?
+        var timedOut = false
+
+        // Drain both pipes while the child runs; neither can fill and block waitUntilExit.
+        while true {
+            for index in 0..<2 where !finished[index] {
+                for _ in 0..<16 {
+                    let count = Darwin.read(descriptors[index], &buffer, buffer.count)
+                    if count > 0 {
+                        let remaining = max(0, 8 * 1024 * 1024 - captured[index].count)
+                        captured[index].append(contentsOf: buffer.prefix(min(count, remaining)))
+                    } else {
+                        if count == 0 || (errno != EAGAIN && errno != EINTR) { finished[index] = true }
+                        break
+                    }
+                }
+            }
+            let now = ProcessInfo.processInfo.systemUptime
+            if !process.isRunning {
+                if finished.allSatisfy({ $0 }) { break }
+                if exitedAt == nil { exitedAt = now }
+                // A descendant may inherit stdout; it must not hold the app's worker forever.
+                if now - (exitedAt ?? now) >= 0.25 { break }
+            } else if now >= deadline {
+                timedOut = true
+                process.terminate()
+                let grace = now + 0.25
+                while process.isRunning && ProcessInfo.processInfo.systemUptime < grace { usleep(10_000) }
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                let killedDeadline = ProcessInfo.processInfo.systemUptime + 0.5
+                while process.isRunning && ProcessInfo.processInfo.systemUptime < killedDeadline { usleep(10_000) }
+                break
+            }
+            var events = descriptors.enumerated().map { index, descriptor in
+                pollfd(fd: finished[index] ? -1 : descriptor, events: Int16(POLLIN | POLLHUP), revents: 0)
+            }
+            _ = poll(&events, nfds_t(events.count), 20)
+        }
+        return CommandOutput(
+            stdout: String(decoding: captured[0], as: UTF8.self),
+            stderr: timedOut ? "Przekroczono czas oczekiwania." : String(decoding: captured[1], as: UTF8.self),
+            exitCode: timedOut ? -2 : process.isRunning ? -1 : process.terminationStatus
+        )
+    }
+
+    static func selfTestFailures() -> [String] {
+        var failures: [String] = []
+        let bulk = run("/bin/sh", ["-c", "printf '%98304s' x; printf '%98304s' y >&2"], timeout: 3)
+        if bulk.exitCode != 0 || bulk.stdout.utf8.count != 98_304 || bulk.stderr.utf8.count != 98_304 {
+            failures.append("duże stdout/stderr blokują polecenie lub tracą dane")
+        }
+        let started = ProcessInfo.processInfo.systemUptime
+        let timed = run("/bin/sleep", ["2"], timeout: 0.05)
+        if timed.exitCode != -2 || ProcessInfo.processInfo.systemUptime - started > 1.5 {
+            failures.append("przekroczenie czasu nie zatrzymało polecenia")
+        }
+        let missing = run("/nonexistent/szlauch-test", [])
+        if missing.exitCode != -1 { failures.append("brak polecenia nie zwraca błędu") }
+        return failures
     }
 }
 
@@ -1421,32 +1581,61 @@ private enum NetworkProbe {
 
     private static func externalCounters() -> [String: LinkCounter] {
         var pointer: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&pointer) == 0, let first = pointer else {
-            return [:]
-        }
+        guard getifaddrs(&pointer) == 0, let first = pointer else { return [:] }
         defer { freeifaddrs(pointer) }
-
         var networkInterfaces = Set<String>()
-        var linkCounters: [String: LinkCounter] = [:]
         var current: UnsafeMutablePointer<ifaddrs>? = first
         while let entryPointer = current {
             let entry = entryPointer.pointee
             let name = String(cString: entry.ifa_name)
             if isExternalDataInterface(name), let address = entry.ifa_addr {
                 let family = Int32(address.pointee.sa_family)
-                if family == AF_INET || family == AF_INET6 {
-                    networkInterfaces.insert(name)
-                } else if family == AF_LINK,
-                          let data = entry.ifa_data?.assumingMemoryBound(to: if_data.self).pointee {
-                    linkCounters[name] = LinkCounter(
-                        incomingBytes: data.ifi_ibytes,
-                        outgoingBytes: data.ifi_obytes
-                    )
-                }
+                if family == AF_INET || family == AF_INET6 { networkInterfaces.insert(name) }
             }
             current = entry.ifa_next
         }
-        return linkCounters.filter { networkInterfaces.contains($0.key) }
+
+        // NET_RT_IFLIST2 provides if_data64. getifaddrs' if_data counters wrap at 4 GiB.
+        var mib: [Int32] = [CTL_NET, PF_ROUTE, 0, AF_UNSPEC, NET_RT_IFLIST2, 0]
+        for _ in 0..<3 {
+            var count = 0
+            guard sysctl(&mib, u_int(mib.count), nil, &count, nil, 0) == 0, count > 0 else { return [:] }
+            var data = Data(count: count)
+            let result = data.withUnsafeMutableBytes { bytes in
+                sysctl(&mib, u_int(mib.count), bytes.baseAddress, &count, nil, 0)
+            }
+            if result == 0 {
+                data.count = count
+                return parseLinkCounters(data).filter { networkInterfaces.contains($0.key) }
+            }
+            if errno != ENOMEM { return [:] }
+        }
+        return [:]
+    }
+
+    private static func parseLinkCounters(_ data: Data) -> [String: LinkCounter] {
+        var counters: [String: LinkCounter] = [:]
+        data.withUnsafeBytes { bytes in
+            var offset = 0
+            while offset + 4 <= bytes.count {
+                let length = Int(bytes.loadUnaligned(fromByteOffset: offset, as: UInt16.self))
+                guard length >= 4, offset + length <= bytes.count else { break }
+                let type = bytes[offset + 3]
+                if type == RTM_IFINFO2, length >= MemoryLayout<if_msghdr2>.size {
+                    let message = bytes.loadUnaligned(fromByteOffset: offset, as: if_msghdr2.self)
+                    var name = [CChar](repeating: 0, count: Int(IF_NAMESIZE))
+                    if if_indextoname(UInt32(message.ifm_index), &name) != nil {
+                        counters[String(cString: name)] = LinkCounter(
+                            incomingBytes: message.ifm_data.ifi_ibytes,
+                            outgoingBytes: message.ifm_data.ifi_obytes,
+                            interfaceIndex: UInt32(message.ifm_index)
+                        )
+                    }
+                }
+                offset += length
+            }
+        }
+        return counters
     }
 
     private static func isExternalDataInterface(_ name: String) -> Bool {
@@ -1509,9 +1698,29 @@ private enum NetworkProbe {
         check(isExternalDataInterface("en8"), "USB LAN powinno być liczone jako łącze zewnętrzne.")
         check(!isExternalDataInterface("utun3"), "Tunel VPN nie może być doliczany drugi raz.")
         check(!isExternalDataInterface("awdl0"), "Interfejs lokalny Apple Wireless Direct Link nie powinien zawyżać Internetu.")
-        check(counterDelta(15, after: UInt32.max - 4) == 20, "Licznik powinien przetrwać rollover 32-bitowy.")
+        check(counterDelta(2_000, after: 100_000_000) == 0, "Reset sterownika nie może dopisać 4 GB.")
+        check(counterDelta(10_000_000_000, after: 1_000_000_000) == 9_000_000_000, "Licznik 64-bitowy gubi wiele rolloverów.")
+        check(parseLinkCounters(Data([0, 0, 0, 0])).isEmpty, "Parser nie odrzuca zerowej długości.")
+        check(parseLinkCounters(Data([255, 255, 0, 0])).isEmpty, "Parser nie odrzuca uciętego komunikatu.")
+        var message = if_msghdr2()
+        message.ifm_msglen = UInt16(MemoryLayout<if_msghdr2>.size)
+        message.ifm_version = UInt8(RTM_VERSION)
+        message.ifm_type = UInt8(RTM_IFINFO2)
+        message.ifm_index = UInt16(if_nametoindex("lo0"))
+        message.ifm_data.ifi_ibytes = 17_000_000_000
+        message.ifm_data.ifi_obytes = 9_000_000_000
+        let fixture = withUnsafeBytes(of: &message) { Data($0) }
+        let parsed = parseLinkCounters(fixture)["lo0"]
+        check(parsed?.incomingBytes == 17_000_000_000 && parsed?.outgoingBytes == 9_000_000_000,
+              "Parser komunikatu jądra obcina liczniki do 32 bitów.")
         return failures
     }
+}
+
+private enum WiFiJoinResult {
+    case success
+    case credentialsRequired
+    case failure(String)
 }
 
 private enum WiFiProbe {
@@ -1577,31 +1786,66 @@ private enum WiFiProbe {
         )
     }
 
-    static func connectSavedNetwork(named name: String) -> ActionResult {
+    static func connectSavedNetwork(named name: String) -> WiFiJoinResult {
+        if isConnected(capture(), to: name) { return .success }
         guard let interfaceName = CWWiFiClient.shared().interface()?.interfaceName else {
             return .failure("Interfejs Wi-Fi jest niedostępny.")
         }
         let result = CommandRunner.run(
-            "/usr/sbin/networksetup",
-            ["-setairportnetwork", interfaceName, name]
+            "/usr/sbin/networksetup", ["-setairportnetwork", interfaceName, name], timeout: 25
         )
-        guard result.exitCode == 0 else {
-            return .failure(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        return .success
+        if waitForConnection(named: name, timeout: result.exitCode == 0 ? 4 : 0) { return .success }
+        return .failure("Nie udało się potwierdzić połączenia z siecią.")
     }
 
-    static func connect(to option: WiFiNetworkOption, password: String?) -> ActionResult {
+    static func connect(to option: WiFiNetworkOption, password: String?) -> WiFiJoinResult {
+        if isConnected(capture(), to: option.name) { return .success }
         guard let interface = CWWiFiClient.shared().interface() else {
             return .failure("Interfejs Wi-Fi jest niedostępny.")
         }
         do {
             try interface.associate(to: option.network, password: password)
-            return .success
+            return waitForConnection(named: option.name) ? .success
+                : .failure("Nie udało się potwierdzić połączenia. Spróbuj ponownie.")
         } catch {
-            return .failure(error.localizedDescription)
+            if isConnected(capture(), to: option.name) { return .success }
+            if needsPassword(error as NSError) { return .credentialsRequired }
+            return .failure("Sieć nie odpowiedziała lub macOS odmówił połączenia. Spróbuj ponownie.")
         }
     }
+
+    static func isConnected(_ state: WiFiState, to name: String) -> Bool {
+        state.connection == .connected && WiFiIdentity.matches(state.networkName, name)
+    }
+
+    private static func waitForConnection(named name: String, timeout: TimeInterval = 4) -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        repeat {
+            if isConnected(capture(), to: name) { return true }
+            if ProcessInfo.processInfo.systemUptime >= deadline { return false }
+            Thread.sleep(forTimeInterval: 0.2)
+        } while true
+    }
+
+    private static func needsPassword(_ error: NSError) -> Bool {
+        // Challenge/PMK rejection is evidence about credentials; a timeout is not.
+        error.domain == CWErrorDomain && [-3912, -3924].contains(error.code)
+    }
+
+    static func selfTestFailures() -> [String] {
+        var failures: [String] = []
+        let connected = WiFiState(connection: .connected, interfaceName: "en0", networkName: "Studio", rssi: -40)
+        if !isConnected(connected, to: "Studio") || isConnected(connected, to: "Other") {
+            failures.append("wynik połączenia nie weryfikuje docelowego SSID")
+        }
+        if needsPassword(NSError(domain: CWErrorDomain, code: -3905))
+            || needsPassword(NSError(domain: CWErrorDomain, code: -3930))
+            || !needsPassword(NSError(domain: CWErrorDomain, code: -3924)) {
+            failures.append("timeout lub brak uprawnień jest mylony z błędnym hasłem")
+        }
+        return failures
+    }
+
 }
 
 private enum SystemProbe {
@@ -1681,23 +1925,9 @@ private enum SystemProbe {
     }
 
     static func applicationUsage() -> (cpu: [ProcessUsage], memory: [ProcessUsage]) {
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-axo", "pid=,%cpu=,rss=,comm="]
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-        } catch {
-            return ([], [])
-        }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0,
-              let text = String(data: data, encoding: .utf8) else {
-            return ([], [])
-        }
+        let result = CommandRunner.run("/bin/ps", ["-axo", "pid=,%cpu=,rss=,comm="], timeout: 5)
+        guard result.exitCode == 0 else { return ([], []) }
+        let text = result.stdout
         var applications: [String: ProcessUsage] = [:]
         for line in text.components(separatedBy: .newlines) {
             let fields = line.split(
@@ -1721,13 +1951,16 @@ private enum SystemProbe {
         }
         let items = Array(applications.values)
         return (
-            cpu: items.sorted { $0.cpu > $1.cpu }.prefix(8).map { $0 },
-            memory: items.sorted { $0.memoryBytes > $1.memoryBytes }.prefix(8).map { $0 }
+            cpu: items.sorted { $0.cpu == $1.cpu ? $0.name < $1.name : $0.cpu > $1.cpu }.prefix(8).map { $0 },
+            memory: items.sorted { $0.memoryBytes == $1.memoryBytes ? $0.name < $1.name : $0.memoryBytes > $1.memoryBytes }.prefix(8).map { $0 }
         )
     }
 
-    private static func applicationName(from command: String) -> String? {
-        guard let range = command.range(of: ".app/") else { return nil }
+    fileprivate static func applicationName(from command: String) -> String? {
+        guard let range = command.range(of: ".app/") else {
+            let name = URL(fileURLWithPath: command).lastPathComponent
+            return name.isEmpty ? nil : name
+        }
         let bundleEnd = command.index(range.lowerBound, offsetBy: 4)
         let bundlePath = String(command[..<bundleEnd])
         let name = URL(fileURLWithPath: bundlePath)
@@ -1763,8 +1996,8 @@ private enum RateDisplayUnit: String, CaseIterable, Identifiable {
 }
 
 private enum RateFormatter {
-    private static let kilobyte = 1024.0
-    private static let megabyte = kilobyte * 1024
+    private static let kilobyte = 1_000.0
+    private static let megabyte = 1_000_000.0
 
     private static let detailedNumber: NumberFormatter = {
         let formatter = NumberFormatter()
@@ -1794,14 +2027,18 @@ private enum RateFormatter {
     }()
 
     static func menu(_ bytesPerSecond: Double, unit: RateDisplayUnit) -> String {
+        let scaled: Double
         switch unit {
-        case .kilobytes:
-            return "\(whole(bytesPerSecond / kilobyte)) \(unit.rawValue)"
-        case .megabytes:
-            return "\(megabytes(bytesPerSecond / megabyte)) \(unit.rawValue)"
-        case .megabits:
-            return "\(megabytes(bytesPerSecond * 8 / megabyte)) \(unit.rawValue)"
+        case .kilobytes: scaled = max(0, bytesPerSecond) / kilobyte
+        case .megabytes: scaled = max(0, bytesPerSecond) / megabyte
+        case .megabits: scaled = max(0, bytesPerSecond) * 8 / megabyte
         }
+        // Fit a fixed menu-bar slot without hiding the selected unit.
+        let precision = unit == .kilobytes ? 0 : scaled < 1 ? 3 : scaled < 100 ? 2 : scaled < 1000 ? 1 : 0
+        let value = scaled < 100_000
+            ? String(format: "%.*f", precision, scaled).replacingOccurrences(of: ".", with: ",")
+            : String(format: "%.0e", scaled)
+        return "\(value) \(unit.rawValue)"
     }
 
     static func detailed(_ bytesPerSecond: Double, unit: RateDisplayUnit) -> String {
@@ -1840,7 +2077,7 @@ private enum RateFormatter {
         if !detailed(2_048, unit: .megabytes).hasSuffix(" MB/s") {
             failures.append("tryb MB/s dynamicznie zmienił jednostkę")
         }
-        if detailed(megabyte, unit: .megabits) != "8,00 Mb/s" {
+        if detailed(1_000_000, unit: .megabits) != "8,00 Mb/s" {
             failures.append("przeliczenie megabajtów na megabity jest niepoprawne")
         }
         return failures
@@ -1902,11 +2139,11 @@ private enum WeatherDisplay {
         return "\(Int(value.rounded()))°C"
     }
 
-    static func symbol(for code: Int?) -> String {
+    static func symbol(for code: Int?, isDay: Bool = true) -> String {
         guard let code else { return "cloud.sun.fill" }
         switch code {
-        case 0: return "sun.max.fill"
-        case 1, 2: return "cloud.sun.fill"
+        case 0: return isDay ? "sun.max.fill" : "moon.stars.fill"
+        case 1, 2: return isDay ? "cloud.sun.fill" : "cloud.moon.fill"
         case 3: return "cloud.fill"
         case 45, 48: return "cloud.fog.fill"
         case 51, 53, 55, 56, 57: return "cloud.drizzle.fill"
@@ -1978,9 +2215,10 @@ private enum WeatherDisplay {
 private struct WeatherGlyph: View {
     let code: Int?
     let size: CGFloat
+    var isDay: Bool = true
 
     var body: some View {
-        Image(systemName: WeatherDisplay.symbol(for: code))
+        Image(systemName: WeatherDisplay.symbol(for: code, isDay: isDay))
             .font(.system(size: size, weight: .semibold))
             .symbolRenderingMode(.palette)
             .foregroundStyle(
@@ -1991,8 +2229,9 @@ private struct WeatherGlyph: View {
 }
 
 private enum SleepService {
-    static let sudoersFile = "/private/etc/sudoers.d/szlauch-pmset"
+    static var sudoersFile: String { "/private/etc/sudoers.d/szlauch-pmset-\(getuid())" }
     private static let legacySudoersFiles = [
+        "/private/etc/sudoers.d/szlauch-pmset",
         "/private/etc/sudoers.d/pulse-bar-pmset",
         "/private/etc/sudoers.d/sleep-toggle-pmset"
     ]
@@ -2016,8 +2255,11 @@ private enum SleepService {
     }
 
     static func hasPermission() -> Bool {
-        FileManager.default.fileExists(atPath: sudoersFile)
-            || legacySudoersFiles.contains(where: FileManager.default.fileExists(atPath:))
+        guard FileManager.default.fileExists(atPath: sudoersFile)
+            || legacySudoersFiles.contains(where: FileManager.default.fileExists(atPath:)) else { return false }
+        return ["0", "1"].allSatisfy { value in
+            CommandRunner.run("/usr/bin/sudo", ["-n", "-l", "--", "/usr/bin/pmset", "-a", "disablesleep", value], timeout: 3).exitCode == 0
+        }
     }
 
     static func setPrevention(_ enabled: Bool) -> ActionResult {
@@ -2061,13 +2303,29 @@ private enum SleepService {
     }
 
     static func removePermission() -> ActionResult {
-        let files = ([sudoersFile] + legacySudoersFiles)
-            .map(shellQuote)
-            .joined(separator: " ")
+        let user = NSUserName()
+        guard user.range(of: #"^[A-Za-z0-9._-]+$"#, options: .regularExpression) != nil else {
+            return .failure("Nie mogę bezpiecznie rozpoznać użytkownika tego Maca.")
+        }
+        let legacy = legacySudoersFiles.map(shellQuote).joined(separator: " ")
+        let rule = "\(user) ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1"
         let script = """
         set -eu
         /usr/bin/pmset -a disablesleep 0
-        /bin/rm -f \(files)
+        /bin/rm -f \(shellQuote(sudoersFile))
+        rule=\(shellQuote(rule))
+        for file in \(legacy); do
+          [[ -f "$file" ]] || continue
+          /usr/bin/grep -Fqx -- "$rule" "$file" || continue
+          tmp=$(/usr/bin/mktemp /private/etc/sudoers.d/szlauch-remove.XXXXXX)
+          trap '/bin/rm -f "$tmp"' EXIT
+          /usr/bin/awk -v target="$rule" '$0 != target { print }' "$file" > "$tmp"
+          /usr/sbin/visudo -cf "$tmp" >/dev/null
+          /usr/sbin/chown root:wheel "$tmp"
+          /bin/chmod 0440 "$tmp"
+          /bin/mv "$tmp" "$file"
+        done
+        /usr/sbin/visudo -cf /private/etc/sudoers >/dev/null
         """
         return runAdministrativeScript(
             script,
@@ -2099,22 +2357,10 @@ private enum SleepService {
         verifies: () -> Bool,
         failureText: String
     ) -> ActionResult {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("szlauch-sleep-\(UUID().uuidString).sh")
-        do {
-            try script.write(to: url, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes(
-                [.posixPermissions: NSNumber(value: 0o700)],
-                ofItemAtPath: url.path
-            )
-        } catch {
-            return .failure("Nie udało się przygotować konfiguracji.")
-        }
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        let command = "/bin/zsh " + shellQuote(url.path)
+        // Keep the privileged payload in the authorization request, not in a user-writable file.
+        let command = "/bin/zsh -c " + shellQuote(script)
         let osaCommand = "do shell script \(appleScriptLiteral(command)) with administrator privileges"
-        let result = CommandRunner.run("/usr/bin/osascript", ["-e", osaCommand])
+        let result = CommandRunner.run("/usr/bin/osascript", ["-e", osaCommand], timeout: 120)
         guard result.exitCode == 0, verifies() else {
             let text = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
             if isUserCancellation(text) {
@@ -2279,6 +2525,7 @@ private enum VPNService {
 
 private enum TrafficHistoryStore {
     private static let bucketsKey = "traffic-history-v1.buckets"
+    private static let hotspotResetKey = "traffic-history-v2.hotspot-reset"
     private static let savedAtKey = "traffic-history-v1.saved-at"
     private static let saveInterval: TimeInterval = 5
     private static let retentionDays = 31
@@ -2293,7 +2540,10 @@ private enum TrafficHistoryStore {
         if persisting, buckets != decoded {
             save(buckets)
         }
-        return TrafficHistoryState(buckets: buckets)
+        let reset = defaults.data(forKey: hotspotResetKey).flatMap {
+            try? JSONDecoder().decode(HotspotReset.self, from: $0)
+        }
+        return TrafficHistoryState(buckets: buckets, hotspotReset: reset)
     }
 
     static func record(
@@ -2313,7 +2563,7 @@ private enum TrafficHistoryStore {
             bucket.add(download: download, upload: upload, route: route)
             buckets.append(bucket)
         }
-        let updated = TrafficHistoryState(buckets: buckets)
+        let updated = TrafficHistoryState(buckets: buckets, hotspotReset: history.hotspotReset)
         let defaults = UserDefaults.standard
         let savedAt = defaults.object(forKey: savedAtKey) as? Date ?? .distantPast
         if now.timeIntervalSince(savedAt) >= saveInterval {
@@ -2330,7 +2580,13 @@ private enum TrafficHistoryStore {
 
     static func persist(_ history: TrafficHistoryState, now: Date = Date()) {
         save(retainedBuckets(history.buckets, now: now))
-        UserDefaults.standard.set(now, forKey: savedAtKey)
+        let defaults = UserDefaults.standard
+        if let reset = history.hotspotReset, let data = try? JSONEncoder().encode(reset) {
+            defaults.set(data, forKey: hotspotResetKey)
+        } else {
+            defaults.removeObject(forKey: hotspotResetKey)
+        }
+        defaults.set(now, forKey: savedAtKey)
     }
 
     static func selfTestFailures() -> [String] {
@@ -2359,8 +2615,45 @@ private enum TrafficHistoryStore {
             failures.append("historia hotspotu nie kompaktuje starych dni ani nie usuwa danych po 31 dniach")
         }
         let cleared = removingHotspot(from: history, now: date(3, 18), calendar: calendar)
-        if cleared.totals(for: .hotspot).total != 0 || cleared.totals(for: .wifi).total != 5_000_000 {
+        let expected = TrafficHistoryState(buckets: retained)
+        if cleared.hotspotDays(now: date(3, 18), calendar: calendar).contains(where: { $0.totals.total != 0 })
+            || cleared.totals().total != expected.totals().total
+            || cleared.totals(for: .hotspot).total != expected.totals(for: .hotspot).total {
             failures.append("reset hotspotu narusza dane całego ruchu")
+        }
+        var newMinute = TrafficBucket(minute: date(3, 19))
+        newMinute.add(download: 123_000, upload: 45_000, route: .hotspot)
+        let afterReset = TrafficHistoryState(buckets: cleared.buckets + [newMinute], hotspotReset: cleared.hotspotReset)
+        if afterReset.hotspotDays(now: date(3, 20), calendar: calendar).first?.totals.download != 123_000 {
+            failures.append("nowy transfer po resecie nie jest liczony od zera")
+        }
+        let compacted = TrafficHistoryState(
+            buckets: retainedBuckets(afterReset.buckets, now: date(4, 12), calendar: calendar),
+            hotspotReset: cleared.hotspotReset
+        )
+        if compacted.hotspotDays(count: 2, now: date(4, 12), calendar: calendar).last?.totals.download != 123_000 {
+            failures.append("kompakcja dnia gubi bazę resetu hotspotu")
+        }
+        let resetAgain = removingHotspot(from: afterReset, now: date(3, 21), calendar: calendar)
+        if resetAgain.totals().total != afterReset.totals().total
+            || resetAgain.hotspotDays(now: date(3, 21), calendar: calendar).first?.totals.total != 0 {
+            failures.append("kolejny reset narusza sumy")
+        }
+        let midnight = calendar.startOfDay(for: date(4))
+        var previousMinute = TrafficBucket(minute: midnight.addingTimeInterval(-5 * 60))
+        previousMinute.add(download: 60_000_000, upload: 0, route: .wifi)
+        var midnightMinute = TrafficBucket(minute: midnight)
+        midnightMinute.add(download: 1_000_000, upload: 0, route: .wifi)
+        let nextDay = midnight.addingTimeInterval(5 * 60)
+        let crossing = TrafficHistoryState(buckets: retainedBuckets([previousMinute, midnightMinute], now: nextDay, calendar: calendar))
+        let window = TrafficWindow.make(from: crossing, rateHistory: .initial, range: .quarterHour, now: nextDay)
+        if window.totals.download != 61_000_000 { failures.append("okno 15 min traci ruch o północy") }
+        let dayWindow = TrafficWindow.make(from: crossing, rateHistory: .initial, range: .today, now: nextDay)
+        if dayWindow.maximumDownload == 0 { failures.append("prawdziwa próbka z 00:00 zniknęła z wykresu") }
+        if let encoded = try? JSONEncoder().encode(cleared.hotspotReset),
+           let decoded = try? JSONDecoder().decode(HotspotReset.self, from: encoded),
+           decoded.download != 720_000_000 {
+            failures.append("baza resetu nie przechodzi zapisu/odczytu")
         }
         return failures
     }
@@ -2370,13 +2663,13 @@ private enum TrafficHistoryStore {
         now: Date,
         calendar: Calendar = .current
     ) -> TrafficHistoryState {
-        let buckets = retainedBuckets(history.buckets, now: now, calendar: calendar).map { bucket in
-            var cleared = bucket
-            cleared.hotspotDownload = 0
-            cleared.hotspotUpload = 0
-            return cleared
-        }
-        return TrafficHistoryState(buckets: buckets)
+        let buckets = retainedBuckets(history.buckets, now: now, calendar: calendar)
+        let day = calendar.startOfDay(for: now)
+        let totals = TrafficHistoryState(buckets: buckets).todayTotals(for: .hotspot, now: now, calendar: calendar)
+        return TrafficHistoryState(
+            buckets: buckets,
+            hotspotReset: HotspotReset(day: day, download: totals.download, upload: totals.upload)
+        )
     }
 
     private static func retainedBuckets(
@@ -2390,12 +2683,13 @@ private enum TrafficHistoryStore {
         var daily: [Date: TrafficBucket] = [:]
         var currentDay: [TrafficBucket] = []
         for bucket in candidates {
-            guard bucket.minute < today else {
+            guard bucket.minute < today && bucket.minute < now.addingTimeInterval(-61 * 60) else {
                 currentDay.append(bucket)
                 continue
             }
             let day = calendar.startOfDay(for: bucket.minute)
             var aggregate = daily[day] ?? TrafficBucket(minute: day)
+            aggregate.isAggregate = true
             for route in [TrafficRoute.wifi, .hotspot, .other] {
                 let values = bucket.totals(for: route)
                 aggregate.add(download: values.download, upload: values.upload, route: route)
@@ -2505,22 +2799,24 @@ private enum WeatherService {
     private struct OpenMeteoResponse: Decodable {
         struct Current: Decodable {
             let time: String
+            let is_day: Int?
             let temperature_2m: Double
-            let apparent_temperature: Double
+            let apparent_temperature: Double?
             let weather_code: Int
-            let precipitation: Double
+            let precipitation: Double?
             let wind_speed_10m: Double
-            let wind_gusts_10m: Double
+            let wind_gusts_10m: Double?
         }
 
         struct Hourly: Decodable {
             let time: [String]
+            let is_day: [Int]?
             let temperature_2m: [Double]
-            let precipitation_probability: [Int]
-            let precipitation: [Double]
+            let precipitation_probability: [Int?]
+            let precipitation: [Double?]
             let weather_code: [Int]
             let wind_speed_10m: [Double]
-            let wind_gusts_10m: [Double]
+            let wind_gusts_10m: [Double?]
         }
 
         let current: Current
@@ -2613,8 +2909,9 @@ private enum WeatherService {
         }
         var request = URLRequest(url: url)
         request.timeoutInterval = 8
-        URLSession.shared.dataTask(with: request) { data, _, _ in
-            guard let data,
+        URLSession.shared.dataTask(with: request) { data, result, _ in
+            guard let http = result as? HTTPURLResponse, http.statusCode == 200,
+                  let data,
                   let response = try? JSONDecoder().decode(AirQualityResponse.self, from: data),
                   let current = response.current else {
                 guard retriesRemaining > 0 else {
@@ -2655,8 +2952,9 @@ private enum WeatherService {
         }
         var request = URLRequest(url: url)
         request.timeoutInterval = 8
-        URLSession.shared.dataTask(with: request) { data, _, _ in
-            guard let data,
+        URLSession.shared.dataTask(with: request) { data, result, _ in
+            guard let http = result as? HTTPURLResponse, http.statusCode == 200,
+                  let data,
                   let response = try? JSONDecoder().decode(GeocodingResponse.self, from: data),
                   let result = response.results?.first else {
                 completion(nil)
@@ -2705,11 +3003,11 @@ private enum WeatherService {
             URLQueryItem(name: "longitude", value: "\(place.longitude)"),
             URLQueryItem(
                 name: "current",
-                value: "temperature_2m,apparent_temperature,weather_code,precipitation,wind_speed_10m,wind_gusts_10m"
+                value: "temperature_2m,apparent_temperature,weather_code,precipitation,wind_speed_10m,wind_gusts_10m,is_day"
             ),
             URLQueryItem(
                 name: "hourly",
-                value: "temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_gusts_10m"
+                value: "temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_gusts_10m,is_day"
             ),
             URLQueryItem(name: "forecast_days", value: "2"),
             URLQueryItem(name: "timezone", value: "auto")
@@ -2723,8 +3021,9 @@ private enum WeatherService {
         }
         var request = URLRequest(url: url)
         request.timeoutInterval = 8
-        URLSession.shared.dataTask(with: request) { data, _, _ in
-            guard let data,
+        URLSession.shared.dataTask(with: request) { data, result, _ in
+            guard let http = result as? HTTPURLResponse, http.statusCode == 200,
+                  let data,
                   let response = try? JSONDecoder().decode(OpenMeteoResponse.self, from: data) else {
                 retryOpenMeteo(
                     for: place,
@@ -2761,7 +3060,9 @@ private enum WeatherService {
                     precipitation: response.hourly.precipitation[index],
                     windSpeed: response.hourly.wind_speed_10m[index],
                     windGusts: response.hourly.wind_gusts_10m[index],
-                    weatherCode: response.hourly.weather_code[index]
+                    weatherCode: response.hourly.weather_code[index],
+                    precipitationStart: precipitationStart(for: dateFormatter.date(from: response.hourly.time[index]), source: source),
+                    isDay: response.hourly.is_day.flatMap { $0.indices.contains(index) ? $0[index] == 1 : nil } ?? true
                 )
             }
             completion(
@@ -2776,7 +3077,9 @@ private enum WeatherService {
                     precipitation: response.current.precipitation,
                     hours: hours,
                     outlook: outlook(for: hours, source: source),
-                    source: source
+                    source: source,
+                    fetchedAt: Date(),
+                    isDay: response.current.is_day != 0
                 )
             )
         }.resume()
@@ -2820,7 +3123,8 @@ private enum WeatherService {
         }
         var request = URLRequest(url: url)
         request.timeoutInterval = 8
-        request.setValue("Szlauch/0.1 (app.szlauch.macos)", forHTTPHeaderField: "User-Agent")
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.4.0"
+        request.setValue("Szlauch/\(version) (https://github.com/jakiesluchawki/SZLAUCH)", forHTTPHeaderField: "User-Agent")
         URLSession.shared.dataTask(with: request) { data, response, _ in
             guard let http = response as? HTTPURLResponse,
                   http.statusCode == 200,
@@ -2862,7 +3166,9 @@ private enum WeatherService {
                     weatherCode: metNoWeatherCode(
                         symbol: period.summary?.symbol_code,
                         cloudCoverage: moment.data.instant.details.cloud_area_fraction
-                    )
+                    ),
+                    precipitationStart: date,
+                    isDay: !(period.summary?.symbol_code?.hasSuffix("_night") ?? false)
                 )
             }.prefix(24).map { $0 }
             guard let current = hours.first else {
@@ -2881,7 +3187,9 @@ private enum WeatherService {
                     precipitation: current.precipitation,
                     hours: hours,
                     outlook: outlook(for: hours, source: .metNo),
-                    source: .metNo
+                    source: .metNo,
+                    fetchedAt: Date(),
+                    isDay: current.isDay
                 )
             )
         }.resume()
@@ -2901,6 +3209,10 @@ private enum WeatherService {
         return 0
     }
 
+    static func precipitationStart(for timestamp: Date?, source: WeatherSource) -> Date? {
+        timestamp?.addingTimeInterval(source == .metNo ? 0 : -3600)
+    }
+
     static func rainNotice(for hours: [ForecastHour]) -> RainNotice? {
         let horizon = Array(hours.prefix(24))
         guard let firstPossible = horizon.first(where: hasPossibleRainEvidence) else {
@@ -2918,9 +3230,7 @@ private enum WeatherService {
         let peakProbability = relevantHours.compactMap(\.precipitationProbability).max()
         let totalRain = relevantHours.compactMap(\.precipitation).reduce(0, +)
         let lastPossible = relevantHours.last ?? firstPossible
-        let hourRange = firstPossible.time == lastPossible.time
-            ? firstPossible.shortTime
-            : "\(firstPossible.shortTime)-\(lastPossible.shortTime)"
+        let hourRange = "\(rainTime(firstPossible.rainStart, fallback: firstPossible.shortTime))-\(rainTime(lastPossible.rainEnd, fallback: lastPossible.shortTime))"
         var details = ["\(expected ? "Opady" : "Możliwe opady") \(hourRange)"]
         if totalRain >= 0.1 {
             details.append(WeatherDisplay.rainfall(totalRain))
@@ -2952,17 +3262,68 @@ private enum WeatherService {
     ]
 
     private static func timingText(for hour: ForecastHour) -> String {
-        guard let date = hour.date else {
+        guard let date = hour.rainStart else {
             return "od \(hour.shortTime)"
         }
         let calendar = Calendar.autoupdatingCurrent
+        if date <= Date(), (hour.rainEnd ?? date) > Date() { return "teraz" }
+        let time = rainTime(date, fallback: hour.shortTime)
         if calendar.isDateInToday(date) {
-            return "dziś od \(hour.shortTime)"
+            return "dziś od \(time)"
         }
         if calendar.isDateInTomorrow(date) {
-            return "jutro od \(hour.shortTime)"
+            return "jutro od \(time)"
         }
         return "od \(hour.shortTime)"
+    }
+
+    private static func rainTime(_ date: Date?, fallback: String) -> String {
+        guard let date else { return fallback }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
+    static func selfTestFailures() -> [String] {
+        var failures: [String] = []
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        if precipitationStart(for: date, source: .openMeteo) != date.addingTimeInterval(-3600)
+            || precipitationStart(for: date, source: .icon) != date.addingTimeInterval(-3600)
+            || precipitationStart(for: date, source: .metNo) != date {
+            failures.append("przedziały godzinowe opadu różnią się o godzinę między dostawcami")
+        }
+        let empty = WeatherConditionsSection(weather: .loading(source: .openMeteo), hours: [], range: .fourHours, airQuality: nil)
+        if empty.rainValue != "--" { failures.append("brak pomiaru opadu udaje zero") }
+        if WeatherDisplay.symbol(for: 0, isDay: false) != "moon.stars.fill" {
+            failures.append("nocna prognoza pokazuje słońce")
+        }
+        let unknownRain = ForecastHour(
+            time: "12:00", date: date, temperature: 20, precipitationProbability: nil,
+            precipitation: nil, windSpeed: 10, windGusts: nil, weatherCode: 0
+        )
+        for source in [WeatherSource.openMeteo, .icon, .metNo] {
+            if !outlook(for: [unknownRain], source: source).contains("Brak danych o opadach") {
+                failures.append("brak opadu/probability udaje prognozę bez deszczu")
+            }
+        }
+        let nullableFixture = Data("""
+        {"current":{"time":"2026-09-01T12:00","is_day":0,"temperature_2m":20,
+        "apparent_temperature":null,"weather_code":2,"precipitation":null,
+        "wind_speed_10m":10,"wind_gusts_10m":null},
+        "hourly":{"time":["2026-09-01T13:00"],"is_day":[0],"temperature_2m":[19],
+        "precipitation_probability":[null],"precipitation":[null],"weather_code":[2],
+        "wind_speed_10m":[10],"wind_gusts_10m":[null]},"timezone":"Europe/Warsaw"}
+        """.utf8)
+        do {
+            let decoded = try JSONDecoder().decode(OpenMeteoResponse.self, from: nullableFixture)
+            if decoded.current.precipitation != nil || decoded.hourly.precipitation[0] != nil
+                || decoded.hourly.precipitation_probability[0] != nil || decoded.current.is_day != 0 {
+                failures.append("dekoder zmienia brakujące dane lub tryb nocny")
+            }
+        } catch {
+            failures.append("brak pomiaru opcjonalnego blokuje całą prognozę")
+        }
+        return failures
     }
 
     static func outlook(for hours: [ForecastHour], source: WeatherSource) -> String {
@@ -2974,12 +3335,13 @@ private enum WeatherService {
         let high = hours.map(\.temperature).max() ?? 0
         let wind = hours.map(\.windSpeed).max() ?? 0
         let rainText: String
-        if source == .metNo {
-            let precipitation = hours.compactMap(\.precipitation).max() ?? 0
-            if precipitation >= 1 {
-                rainText = "Opad do \(WeatherDisplay.rainfall(precipitation))"
+        if source == .metNo || hours.allSatisfy({ $0.precipitationProbability == nil }) {
+            if let precipitation = hours.compactMap(\.precipitation).max() {
+                rainText = precipitation >= 1
+                    ? "Opad do \(WeatherDisplay.rainfall(precipitation))"
+                    : "Bez istotnego opadu"
             } else {
-                rainText = "Bez istotnego opadu"
+                rainText = "Brak danych o opadach"
             }
         } else {
             let precipitation = hours.compactMap(\.precipitationProbability).max() ?? 0
@@ -3103,6 +3465,7 @@ private final class PulseModel: ObservableObject {
     @Published private(set) var wifiConnectingName: String?
     @Published private(set) var wifiConnectionError: String?
     @Published var wifiPasswordRequest: WiFiNetworkOption?
+    @Published private(set) var wifiPasswordCandidate: WiFiNetworkOption?
     @Published private(set) var personalHotspotName = PersonalHotspotStore.current()
     @Published private(set) var system = SystemState.initial
     @Published private(set) var connectionCost = ConnectionCost.loading
@@ -3112,10 +3475,12 @@ private final class PulseModel: ObservableObject {
     @Published private(set) var weather: WeatherState
     @Published private(set) var weatherSource: WeatherSource
     @Published private(set) var airQuality: AirQualitySnapshot?
+    @Published private(set) var airQualityLoading = false
     @Published var weatherDetailsShown = false
     @Published var trafficDetailsShown = false
     @Published var wifiDetailsShown = false
     @Published var systemDetailsShown = false
+    @Published var processSort = ProcessSort.cpu
     @Published var hotspotDetailsShown = false
     @Published var sleepPermissionPromptShown = false
     @Published private(set) var sleep = SleepState.loading
@@ -3134,12 +3499,15 @@ private final class PulseModel: ObservableObject {
     private var detailedRateUploadBytes: UInt64 = 0
     private var timer: Timer?
     private var secondsSinceVPNRefresh = 0
-    private var secondsSinceWeatherRefresh = 0
+    private var lastWeatherAttempt = Date.distantPast
     private var secondsSinceProcessRefresh = 0
     private var secondsSinceWiFiRefresh = 0
     private var secondsSinceSystemRefresh = 0
     private var panelVisible = false
+    fileprivate var shouldPollProcesses: Bool { panelVisible && systemDetailsShown }
     private var wifiRefreshInProgress = false
+    private var processRefreshInProgress = false
+    private var processRefreshGeneration = 0
     private let pathMonitor = NWPathMonitor()
     private let pathQueue = DispatchQueue(label: "app.szlauch.macos.path")
     private let locationProvider = DeviceLocationProvider()
@@ -3206,7 +3574,7 @@ private final class PulseModel: ObservableObject {
                     self.sampleSystem()
                 }
             }
-            if self.systemDetailsShown {
+            if self.shouldPollProcesses {
                 self.secondsSinceProcessRefresh += 1
                 if self.secondsSinceProcessRefresh >= 5 {
                     self.secondsSinceProcessRefresh = 0
@@ -3220,11 +3588,7 @@ private final class PulseModel: ObservableObject {
                     self.refreshVPN()
                 }
             }
-            self.secondsSinceWeatherRefresh += 1
-            if self.secondsSinceWeatherRefresh >= 900 {
-                self.secondsSinceWeatherRefresh = 0
-                self.refreshWeather()
-            }
+            self.refreshWeatherIfNeeded()
         }
         if let timer {
             RunLoop.main.add(timer, forMode: .common)
@@ -3247,10 +3611,22 @@ private final class PulseModel: ObservableObject {
         refreshSleep()
         refreshVPN()
         refreshLaunchAtLogin()
+        if systemDetailsShown { refreshProcessDetails() }
+        refreshWeatherIfNeeded()
+    }
+
+    func openSystemDetails(sort: ProcessSort) {
+        processSort = sort
+        if !systemDetailsShown { toggleSystemDetails() }
+    }
+
+    func dismissBanner() {
+        banner = nil
     }
 
     func panelDidClose() {
         panelVisible = false
+        processRefreshGeneration += 1
         secondsSinceProcessRefresh = 0
     }
 
@@ -3322,12 +3698,14 @@ private final class PulseModel: ObservableObject {
 
     func returnFromPassiveDetailTap() {
         guard !weatherDetailsShown,
-              trafficDetailsShown || wifiDetailsShown || systemDetailsShown || hotspotDetailsShown else {
+              trafficDetailsShown || wifiDetailsShown || systemDetailsShown || hotspotDetailsShown || sleepPermissionPromptShown else {
             return
         }
         trafficDetailsShown = false
         systemDetailsShown = false
         hotspotDetailsShown = false
+        sleepPermissionPromptShown = false
+        banner = nil
         if wifiDetailsShown {
             wifiDetailsShown = false
             wifiPasswordRequest = nil
@@ -3417,23 +3795,19 @@ private final class PulseModel: ObservableObject {
 
     func connectWiFi(_ option: WiFiNetworkOption, password: String? = nil) {
         guard wifiConnectingName == nil else { return }
-        if wifi.connection == .connected,
-           WiFiIdentity.matches(wifi.networkName, option.name) {
+        if WiFiProbe.isConnected(wifi, to: option.name) {
             wifiPasswordRequest = nil
+            wifiPasswordCandidate = nil
             wifiConnectionError = nil
             return
         }
         wifiConnectingName = option.name
         wifiConnectionError = nil
+        wifiPasswordCandidate = nil
         DispatchQueue.global(qos: .userInitiated).async {
-            let result: ActionResult
-            if password == nil {
-                let savedResult = WiFiProbe.connectSavedNetwork(named: option.name)
-                if case .success = savedResult {
-                    result = savedResult
-                } else {
-                    result = WiFiProbe.connect(to: option, password: nil)
-                }
+            let result: WiFiJoinResult
+            if password == nil, case .success = WiFiProbe.connectSavedNetwork(named: option.name) {
+                result = .success
             } else {
                 result = WiFiProbe.connect(to: option, password: password)
             }
@@ -3441,29 +3815,31 @@ private final class PulseModel: ObservableObject {
             DispatchQueue.main.async {
                 self.wifiConnectingName = nil
                 self.wifi = currentWiFi
+                if WiFiProbe.isConnected(currentWiFi, to: option.name) {
+                    self.wifiConnectionError = nil
+                    self.completeWiFiConnection()
+                    return
+                }
+                guard self.wifiDetailsShown else { return }
                 switch result {
                 case .success:
-                    self.wifiPasswordRequest = nil
-                    self.wifiDetailsShown = false
-                    self.refreshWiFi()
-                    self.sampleNetwork(refreshMetadata: true)
-                case .cancelled:
-                    self.wifiPasswordRequest = nil
+                    self.wifiConnectionError = "Połączenie się zmieniło. Odśwież listę sieci."
+                case .credentialsRequired:
+                    self.wifiPasswordRequest = option
+                    if password != nil { self.wifiConnectionError = "Sieć odrzuciła hasło. Sprawdź je i spróbuj ponownie." }
                 case .failure(let text):
-                    if currentWiFi.connection == .connected,
-                       WiFiIdentity.matches(currentWiFi.networkName, option.name) {
-                        self.wifiPasswordRequest = nil
-                        self.wifiConnectionError = nil
-                    } else if option.secured, password == nil {
-                        self.wifiPasswordRequest = option
-                    } else {
-                        self.wifiConnectionError = text.isEmpty
-                            ? "Nie udało się połączyć z siecią."
-                            : text
-                    }
+                    self.wifiConnectionError = text
+                    self.wifiPasswordCandidate = option.secured ? option : nil
                 }
             }
         }
+    }
+
+    func requestWiFiPassword(_ option: WiFiNetworkOption) {
+        guard !WiFiProbe.isConnected(wifi, to: option.name) else { return }
+        wifiPasswordRequest = option
+        wifiPasswordCandidate = nil
+        wifiConnectionError = nil
     }
 
     func setPersonalHotspotName(_ rawName: String) {
@@ -3504,6 +3880,8 @@ private final class PulseModel: ObservableObject {
     }
 
     private func completeWiFiConnection() {
+        wifiPasswordCandidate = nil
+        wifiConnectionError = nil
         wifiConnectingName = nil
         wifiPasswordRequest = nil
         wifiDetailsShown = false
@@ -3693,6 +4071,12 @@ private final class PulseModel: ObservableObject {
         }
     }
 
+    private func refreshWeatherIfNeeded(now: Date = Date()) {
+        guard weather.place != nil,
+              now.timeIntervalSince(lastWeatherAttempt) >= 900 else { return }
+        refreshWeather()
+    }
+
     func refreshWeather() {
         if weather.place?.usesDeviceLocation == true {
             useDeviceLocation()
@@ -3784,7 +4168,8 @@ private final class PulseModel: ObservableObject {
         if let prior = priorCounter {
             let seconds = max(counter.timestamp.timeIntervalSince(prior.timestamp), 0.1)
             for (interfaceName, current) in counter.monitoredCounters {
-                guard let previous = prior.monitoredCounters[interfaceName] else { continue }
+                guard let previous = prior.monitoredCounters[interfaceName],
+                      previous.interfaceIndex == current.interfaceIndex else { continue }
                 let route = trafficRoute(for: interfaceName, primaryInterface: counter.name)
                 let interfaceDownload = counterDelta(current.incomingBytes, after: previous.incomingBytes)
                 let interfaceUpload = counterDelta(current.outgoingBytes, after: previous.outgoingBytes)
@@ -3955,10 +4340,14 @@ private final class PulseModel: ObservableObject {
     }
 
     private func refreshProcessDetails() {
+        guard shouldPollProcesses, !processRefreshInProgress else { return }
+        processRefreshInProgress = true
+        let generation = processRefreshGeneration
         DispatchQueue.global(qos: .utility).async {
             let applications = SystemProbe.applicationUsage()
             DispatchQueue.main.async {
-                guard self.systemDetailsShown else { return }
+                self.processRefreshInProgress = false
+                guard self.panelVisible, self.systemDetailsShown, generation == self.processRefreshGeneration else { return }
                 self.system = SystemState(
                     cpuUsage: self.system.cpuUsage,
                     memoryUsed: self.system.memoryUsed,
@@ -4106,6 +4495,8 @@ private final class PulseModel: ObservableObject {
 
     private func beginWeatherIntent(needsLocation: Bool = false) -> Int {
         weatherRevision += 1
+        lastWeatherAttempt = Date()
+        airQualityLoading = false
         pendingLocationRevision = needsLocation ? weatherRevision : nil
         airQuality = nil
         return weatherRevision
@@ -4157,15 +4548,22 @@ private final class PulseModel: ObservableObject {
     }
 
     private func fetchAirQuality(for place: WeatherPlace, revision: Int) {
+        airQualityLoading = true
         WeatherService.fetchAirQuality(for: place) { [weak self] snapshot in
             DispatchQueue.main.async {
                 guard let self, revision == self.weatherRevision else { return }
                 self.airQuality = snapshot
+                self.airQualityLoading = false
             }
         }
     }
 
     private func setWeatherFailure(for place: WeatherPlace, source: WeatherSource) {
+        airQualityLoading = false
+        if weather.mode == .ready, weather.place?.latitude == place.latitude, weather.place?.longitude == place.longitude {
+            weather.refreshFailed = true
+            return
+        }
         weather = WeatherState(
             mode: .failure,
             place: place,
@@ -4183,12 +4581,65 @@ private final class PulseModel: ObservableObject {
 
 }
 
-private func counterDelta(_ current: UInt32, after previous: UInt32) -> UInt64 {
-    // getifaddrs exposes 32-bit byte counters on macOS; preserve traffic across rollover.
-    if current >= previous {
-        return UInt64(current - previous)
+private enum RegressionTests {
+    static func failures() -> [String] {
+        var failures: [String] = []
+        func check(_ value: @autoclosure () -> Bool, _ name: String) {
+            if !value() { failures.append(name) }
+        }
+        check(!RuntimeMode.allowsPersistentMeasurements(arguments: ["Szlauch", "--self-test-navigation"]), "self-tests modify measurement history")
+        check(!RuntimeMode.allowsPersistentMeasurements(arguments: ["Szlauch", "--snapshot", "/tmp"]), "snapshots modify measurement history")
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 8.1, weight: .semibold)
+        for unit in RateDisplayUnit.allCases {
+            for rate in [0.0, 1, 999, 1_000_000, 12_500_000, 125_000_000, 3_125_000_000, 125_000_000_000] {
+                let value = RateFormatter.menu(rate, unit: unit)
+                let width = (value as NSString).size(withAttributes: [.font: font]).width
+                check(width <= RateStatusView.statusWidth - 2, "menu clips \(value): \(width) pt")
+            }
+        }
+        check(RateFormatter.detailed(1_000_000, unit: .megabytes) == "1,00 MB/s", "decimal MB/s")
+        check(RateFormatter.detailed(1_000_000, unit: .megabits) == "8,00 Mb/s", "decimal Mb/s")
+        check(SystemProbe.applicationName(from: "/usr/bin/node") == "node", "non-app CPU processes omitted")
+        check(SystemProbe.applicationName(from: "/Applications/Test.app/Contents/MacOS/Test") == "Test", "app grouping changed")
+        let model = PulseModel()
+        model.systemDetailsShown = true
+        model.panelDidClose()
+        check(!model.shouldPollProcesses, "hidden panel polls processes")
+        model.banner = MessageBanner(kind: .error, text: "test")
+        model.returnFromPassiveDetailTap()
+        check(!model.systemDetailsShown && model.banner == nil, "passive return/dismiss")
+        model.weatherDetailsShown = true
+        model.returnFromPassiveDetailTap()
+        check(model.weatherDetailsShown, "weather passive return is not exempt")
+        model.weatherDetailsShown = false
+        model.openSystemDetails(sort: .memory)
+        check(model.systemDetailsShown && model.processSort == .memory, "RAM entry point selects CPU")
+        model.toggleTrafficDetails()
+        check(model.trafficDetailsShown && !model.systemDetailsShown, "detail routes overlap")
+        model.sleepPermissionPromptShown = true
+        model.trafficDetailsShown = false
+        model.returnFromPassiveDetailTap()
+        check(!model.sleepPermissionPromptShown, "permission return is stuck")
+        var state = WeatherState(
+            mode: .ready, place: nil, temperature: 20, apparentTemperature: 20, weatherCode: 0,
+            windSpeed: 0, windGusts: 0, precipitation: nil, hours: [
+                ForecastHour(time: "12:00", date: Date().addingTimeInterval(3600), temperature: 20,
+                             precipitationProbability: nil, precipitation: nil, windSpeed: 0, windGusts: 0, weatherCode: 0)
+            ], outlook: "", source: .openMeteo
+        )
+        state.fetchedAt = Date()
+        check(!state.isStale(), "fresh forecast is marked stale")
+        check(state.isStale(now: Date().addingTimeInterval(1900)), "old forecast looks fresh after wake")
+        let unknown = WeatherConditionsSection(weather: state, hours: state.hours, range: .fourHours, airQuality: nil)
+        check(unknown.rainValue == "--", "unknown rainfall becomes zero")
+        let freshPlace = WeatherPlace(name: "Test", latitude: 0, longitude: 0, usesDeviceLocation: true)
+        check(state.replacingPlace(freshPlace).fetchedAt == state.fetchedAt, "place renaming discards freshness")
+        return failures
     }
-    return UInt64(UInt32.max - previous) + UInt64(current) + 1
+}
+
+private func counterDelta(_ current: UInt64, after previous: UInt64) -> UInt64 {
+    current >= previous ? current - previous : 0
 }
 
 private enum PanelMotion {
@@ -4200,9 +4651,9 @@ private enum PanelMotion {
 }
 
 private enum PanelLayout {
-    static let width: CGFloat = 360
-    static let height: CGFloat = 420
-    static let detailViewportHeight: CGFloat = height - 45
+    static let width: CGFloat = 384
+    static let height: CGFloat = 472
+    static let detailViewportHeight: CGFloat = height - 64
     static let popoverSize = NSSize(width: width, height: height)
 }
 
@@ -4219,10 +4670,15 @@ private struct SzlauchPanel: View {
     @State private var intensityDragOrigin: Double?
     @State private var opacityDragOrigin: Double?
     @State private var appearanceDragAxis: AppearanceDragAxis?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @ViewBuilder
     var body: some View {
-        if #available(macOS 26.0, *) {
+        if RuntimeMode.isSnapshot {
+            mainPanel
+                .environment(\.pulseTheme, theme)
+                .environment(\.colorScheme, .dark)
+        } else if #available(macOS 26.0, *) {
             GlassEffectContainer(spacing: 8) {
                 mainPanel
             }
@@ -4248,115 +4704,130 @@ private struct SzlauchPanel: View {
             && !model.systemDetailsShown
             && !model.hotspotDetailsShown
             && !model.sleepPermissionPromptShown
-            && model.banner == nil
+
     }
 
     private var mainPanel: some View {
-        ZStack(alignment: .top) {
-            if showsCompactDashboard {
-                compactDashboard
-                    .transition(PanelMotion.surfaceTransition)
-            } else {
-                detailPanel
-                    .transition(PanelMotion.surfaceTransition)
+        VStack(spacing: 0) {
+            header
+            ZStack(alignment: .top) {
+                if showsCompactDashboard {
+                    compactDashboard
+                        .transition(.opacity)
+                } else {
+                    detailPanel
+                        .transition(.opacity)
+                }
+            }
+            .frame(height: PanelLayout.detailViewportHeight, alignment: .top)
+            .clipped()
+        }
+        .instrumentGlass(radius: 20)
+        .padding(8)
+        .frame(width: PanelLayout.width, height: PanelLayout.height, alignment: .top)
+        .tint(theme.cta)
+        .animation(reduceMotion || RuntimeMode.isSnapshot ? nil : PanelMotion.navigation, value: navigationKey)
+        .overlay(alignment: .bottom) {
+            if let banner = model.banner {
+                BannerView(banner: banner, onDismiss: model.dismissBanner)
+                    .padding(16)
             }
         }
-        .animation(PanelMotion.navigation, value: showsCompactDashboard)
-        .frame(width: PanelLayout.width, height: PanelLayout.height, alignment: .top)
-        .clipped()
+        .transaction { transaction in
+            if reduceMotion { transaction.animation = nil }
+        }
+    }
+
+    private var navigationKey: Int {
+        if model.weatherDetailsShown { return 1 }
+        if model.trafficDetailsShown { return 2 }
+        if model.systemDetailsShown { return 3 }
+        if model.hotspotDetailsShown { return 4 }
+        if model.wifiDetailsShown { return 5 }
+        if model.sleepPermissionPromptShown { return 6 }
+        return 0
     }
 
     private var compactDashboard: some View {
         VStack(spacing: 0) {
-            header
-                .padding(.top, 4)
             WeatherSummary(model: model)
             InstrumentDivider()
             compactDashboardNetworkSection
             InstrumentDivider()
             compactDashboardSystemSection
+            Spacer(minLength: 6)
             InstrumentDivider()
             compactControlsContent
-            Spacer(minLength: 0)
+                .padding(.bottom, 5)
         }
-        .frame(height: PanelLayout.height - 14)
-        .instrumentGlass(radius: 18)
-        .padding(7)
-        .frame(width: PanelLayout.width, height: PanelLayout.height)
-        .tint(theme.cta)
+        .frame(height: PanelLayout.detailViewportHeight)
     }
 
-    private var detailPanel: some View {
-        VStack(spacing: 6) {
-            header
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 6) {
-                    if model.weatherDetailsShown {
-                        WeatherSummary(model: model)
-                            .pulseGlass(tone: .light)
-                            .transition(PanelMotion.surfaceTransition)
-                    } else {
-                        if model.systemDetailsShown {
-                            compactTransferShortcut
-                                .pulseGlass(tone: .main)
-                                .transition(PanelMotion.surfaceTransition)
-                        } else {
-                            networkSection
-                                .pulseGlass(tone: .main)
-                                .transition(PanelMotion.surfaceTransition)
-                        }
-                        if !model.trafficDetailsShown && !model.wifiDetailsShown {
-                            if model.sleepPermissionPromptShown && !model.systemDetailsShown {
-                                SleepPermissionPrompt(model: model)
-                                    .pulseGlass(tone: .light)
-                                    .transition(PanelMotion.surfaceTransition)
-                            } else {
-                                compactSystemSection
-                                    .pulseGlass(tone: .main)
-                                    .transition(PanelMotion.surfaceTransition)
-                            }
-                            if !model.systemDetailsShown && !model.hotspotDetailsShown {
-                                compactControls
-                                    .transition(PanelMotion.surfaceTransition)
+    private var detailContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if model.weatherDetailsShown {
+                WeatherSummary(model: model)
+            } else if model.trafficDetailsShown {
+                DetailHeading(title: "Transfer", subtitle: "Cały Mac", onBack: model.toggleTrafficDetails)
+                detailTransferReadouts
+                TrafficDetails(model: model)
+                compactSystemShortcut
+            } else if model.systemDetailsShown {
+                DetailHeading(title: "System", subtitle: "CPU i pamięć", onBack: model.toggleSystemDetails)
+                systemMetrics
+                SystemDetails(model: model)
+                compactTransferShortcut
+            } else if model.hotspotDetailsShown {
+                DetailHeading(title: "Hotspot", subtitle: "Ostatnie 7 dni", onBack: model.toggleHotspotDetails)
+                CompactHotspotRow(
+                    history: model.trafficHistory,
+                    connectionCost: model.connectionCost,
+                    expanded: true,
+                    onToggle: model.toggleHotspotDetails,
+                    onReset: model.resetHotspotHistory
+                )
+            } else if model.wifiDetailsShown {
+                networkSection
+            } else if model.sleepPermissionPromptShown {
+                DetailHeading(title: "Nie usypiaj", subtitle: "Jednorazowa konfiguracja", onBack: model.returnFromPassiveDetailTap)
+                SleepPermissionPrompt(model: model)
+            }
+        }
+        .padding(.horizontal, model.weatherDetailsShown || model.wifiDetailsShown ? 4 : 18)
+        .padding(.top, 8)
+        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
 
-                                if let banner = model.banner {
-                                    BannerView(banner: banner)
-                                        .pulseGlass(radius: 12, tone: .light)
-                                        .transition(PanelMotion.surfaceTransition)
-                                }
-                            }
-                        } else if model.trafficDetailsShown {
-                            compactSystemShortcut
-                                .pulseGlass(tone: .main)
-                                .transition(PanelMotion.surfaceTransition)
-                        }
+    @ViewBuilder
+    private var detailPanel: some View {
+        if RuntimeMode.isSnapshot {
+            detailContent
+                .frame(maxWidth: .infinity)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(height: PanelLayout.detailViewportHeight, alignment: .top)
+                .clipped()
+        } else {
+            ScrollView(.vertical) { detailContent }
+                .frame(height: PanelLayout.detailViewportHeight, alignment: .top)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(PanelMotion.navigation) {
+                        model.returnFromPassiveDetailTap()
                     }
                 }
-                .frame(maxWidth: .infinity)
-            }
-            .frame(height: PanelLayout.detailViewportHeight, alignment: .top)
-            .clipped()
-        }
-        .padding(7)
-        .frame(width: PanelLayout.width, height: PanelLayout.height, alignment: .top)
-        .tint(theme.cta)
-        .animation(PanelMotion.navigation, value: model.weatherDetailsShown)
-        .animation(PanelMotion.navigation, value: model.trafficDetailsShown)
-        .animation(PanelMotion.navigation, value: model.wifiDetailsShown)
-        .animation(PanelMotion.navigation, value: model.systemDetailsShown)
-        .animation(PanelMotion.navigation, value: model.hotspotDetailsShown)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(PanelMotion.navigation) {
-                model.returnFromPassiveDetailTap()
-            }
         }
     }
 
     private var header: some View {
         HStack {
-            Label("Szlauch", systemImage: "waveform.path.ecg")
-                .font(.system(size: 12, weight: .semibold))
+            HStack(spacing: 8) {
+                Image(systemName: "waveform.path.ecg")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(theme.cta)
+                Text("Szlauch")
+                    .font(BrandFonts.heading(24))
+            }
                 .foregroundStyle(Palette.ink)
                 .contentShape(Rectangle())
                 .gesture(appearanceGesture)
@@ -4367,7 +4838,7 @@ private struct SzlauchPanel: View {
                 }
             Spacer()
             Text("ODCZYT CO 1 S")
-                .font(.system(size: 9, weight: .semibold))
+                .font(.brand(size: 9, weight: .semibold))
                 .tracking(0.6)
                 .foregroundStyle(Palette.muted)
             Menu {
@@ -4386,7 +4857,7 @@ private struct SzlauchPanel: View {
                 }
             } label: {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.brand(size: 10, weight: .semibold))
                     .foregroundStyle(Palette.muted)
                     .frame(width: 19, height: 19)
                     .contentShape(Rectangle())
@@ -4396,9 +4867,10 @@ private struct SzlauchPanel: View {
             .fixedSize()
             .help("Opcje Szlaucha")
             .accessibilityLabel("Opcje Szlaucha")
+            .snapshotFallback { Image(systemName: "gearshape").font(.system(size: 13)).foregroundStyle(Palette.muted) }
         }
-        .padding(.horizontal, 9)
-        .frame(height: 25)
+        .padding(.horizontal, 18)
+        .frame(height: 48)
     }
 
     private var theme: PulseTheme {
@@ -4461,7 +4933,7 @@ private struct SzlauchPanel: View {
                     model.openWiFiSettings()
                 } label: {
                     Image(systemName: model.wifi.symbolName)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.brand(size: 13, weight: .semibold))
                         .foregroundStyle(model.wifi.isWeak ? Palette.warning : Palette.strong)
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
@@ -4470,10 +4942,10 @@ private struct SzlauchPanel: View {
                 .help("Otwórz ustawienia Wi-Fi")
                 .accessibilityLabel("Otwórz ustawienia Wi-Fi")
                 Text("Wi-Fi")
-                    .font(.system(size: 13).weight(.bold))
+                    .font(.brand(size: 13).weight(.bold))
                     .foregroundStyle(Palette.ink)
                 Text(wifiSubtitle)
-                    .font(.system(size: 10))
+                    .font(.brand(size: 10))
                     .foregroundStyle(Palette.muted)
                     .lineLimit(1)
                 Spacer()
@@ -4495,12 +4967,12 @@ private struct SzlauchPanel: View {
             } else {
                 HStack {
                     Text("TRANSFER · CAŁY MAC")
-                        .font(.system(size: 8.5).weight(.bold))
+                        .font(.brand(size: 8.5).weight(.bold))
                         .tracking(0.55)
                         .foregroundStyle(Palette.muted)
                     Spacer()
                     Text(transferSourceSubtitle)
-                        .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                        .font(.brand(size: 8.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(Palette.muted)
                 }
 
@@ -4558,7 +5030,7 @@ private struct SzlauchPanel: View {
                     model.openWiFiSettings()
                 } label: {
                     Image(systemName: model.wifi.symbolName)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.brand(size: 13, weight: .semibold))
                         .foregroundStyle(model.wifi.isWeak ? Palette.warning : Palette.strong)
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
@@ -4567,10 +5039,10 @@ private struct SzlauchPanel: View {
                 .help("Otwórz ustawienia Wi-Fi")
                 .accessibilityLabel("Otwórz ustawienia Wi-Fi")
                 Text("Wi-Fi")
-                    .font(.system(size: 13).weight(.bold))
+                    .font(.brand(size: 13).weight(.bold))
                     .foregroundStyle(Palette.ink)
                 Text(wifiSubtitle)
-                    .font(.system(size: 10))
+                    .font(.brand(size: 10))
                     .foregroundStyle(Palette.muted)
                     .lineLimit(1)
                 Spacer()
@@ -4586,12 +5058,12 @@ private struct SzlauchPanel: View {
 
             HStack {
                 Text("TRANSFER · CAŁY MAC")
-                    .font(.system(size: 8.5).weight(.bold))
+                    .font(.brand(size: 8.5).weight(.bold))
                     .tracking(0.75)
                     .foregroundStyle(Palette.strong)
                 Spacer()
                 Text(transferSourceSubtitle)
-                    .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                    .font(.brand(size: 8.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(Palette.muted)
             }
 
@@ -4639,93 +5111,30 @@ private struct SzlauchPanel: View {
         return Double(model.system.memoryUsed) / Double(model.system.memoryTotal)
     }
 
-    private var compactSystemSection: some View {
-        VStack(alignment: .leading, spacing: 7) {
+    private var systemMetrics: some View {
+        HStack(spacing: 20) {
             Button {
-                withAnimation(PanelMotion.navigation) {
-                    model.toggleSystemDetails()
-                }
+                model.openSystemDetails(sort: .cpu)
             } label: {
-                HStack(spacing: 8) {
-                    CompactMetric(
-                        title: "CPU",
-                        value: MetricFormatter.percent(model.system.cpuUsage),
-                        progress: model.system.cpuUsage
-                    )
-                    Rectangle()
-                        .fill(Palette.line)
-                        .frame(width: 1, height: 28)
-                    CompactMetric(
-                        title: "RAM",
-                        value: MetricFormatter.percent(
-                            model.system.memoryTotal == 0
-                                ? 0
-                                : Double(model.system.memoryUsed) / Double(model.system.memoryTotal)
-                        ),
-                        progress: model.system.memoryTotal == 0
-                            ? 0
-                            : Double(model.system.memoryUsed) / Double(model.system.memoryTotal)
-                    )
-                }
-                .contentShape(Rectangle())
+                CompactMetric(title: "CPU", value: MetricFormatter.percent(model.system.cpuUsage),
+                              progress: model.system.cpuUsage, color: Palette.strong)
             }
-            .frame(maxWidth: .infinity)
             .buttonStyle(.plain)
-            .help(model.systemDetailsShown ? "Ukryj szczegóły systemu" : "Pokaż szczegóły systemu")
-
-            if model.systemDetailsShown {
-                SystemDetails(model: model)
-                    .transition(PanelMotion.surfaceTransition)
-            } else {
-                CompactHotspotRow(
-                    history: model.trafficHistory,
-                    connectionCost: model.connectionCost,
-                    expanded: model.hotspotDetailsShown,
-                    onToggle: model.toggleHotspotDetails,
-                    onReset: model.resetHotspotHistory
-                )
+            .help("Procesy używające CPU")
+            Button {
+                model.openSystemDetails(sort: .memory)
+            } label: {
+                CompactMetric(title: "RAM", value: MetricFormatter.percent(memoryUsage),
+                              progress: memoryUsage, color: Palette.strong)
             }
+            .buttonStyle(.plain)
+            .help("Procesy używające pamięci")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
     }
 
     private var compactDashboardSystemSection: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Button {
-                withAnimation(PanelMotion.navigation) {
-                    model.toggleSystemDetails()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    CompactMetric(
-                        title: "CPU",
-                        value: MetricFormatter.percent(model.system.cpuUsage),
-                        progress: model.system.cpuUsage,
-                        color: Palette.inbound
-                    )
-                    Rectangle()
-                        .fill(Palette.line)
-                        .frame(width: 1, height: 28)
-                    CompactMetric(
-                        title: "RAM",
-                        value: MetricFormatter.percent(
-                            model.system.memoryTotal == 0
-                                ? 0
-                                : Double(model.system.memoryUsed) / Double(model.system.memoryTotal)
-                        ),
-                        progress: model.system.memoryTotal == 0
-                            ? 0
-                            : Double(model.system.memoryUsed) / Double(model.system.memoryTotal),
-                        color: Palette.inbound
-                    )
-                }
-                .contentShape(Rectangle())
-            }
-            .frame(maxWidth: .infinity)
-            .buttonStyle(.plain)
-            .help("Pokaż szczegóły systemu")
-
+        VStack(alignment: .leading, spacing: 12) {
+            systemMetrics
             CompactHotspotRow(
                 history: model.trafficHistory,
                 connectionCost: model.connectionCost,
@@ -4734,8 +5143,8 @@ private struct SzlauchPanel: View {
                 onReset: model.resetHotspotHistory
             )
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
     }
 
     private var compactTransferShortcut: some View {
@@ -4746,7 +5155,7 @@ private struct SzlauchPanel: View {
         } label: {
             HStack(spacing: 9) {
                 Text("TRANSFER")
-                    .font(.system(size: 8.5, weight: .bold))
+                    .font(.brand(size: 8.5, weight: .bold))
                     .tracking(0.65)
                     .foregroundStyle(Palette.muted)
                 Text("↓ \(RateFormatter.detailed(model.network.instantDownload, unit: model.rateUnit))")
@@ -4756,7 +5165,7 @@ private struct SzlauchPanel: View {
                 Spacer(minLength: 0)
                 InlineNavigationLabel(title: "WYKRES")
             }
-            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+            .font(.brand(size: 9.5, weight: .bold, design: .monospaced))
             .monospacedDigit()
             .contentShape(Rectangle())
             .padding(.horizontal, 14)
@@ -4778,7 +5187,7 @@ private struct SzlauchPanel: View {
         } label: {
             HStack(spacing: 10) {
                 Text("SYSTEM")
-                    .font(.system(size: 8.5, weight: .bold))
+                    .font(.brand(size: 8.5, weight: .bold))
                     .tracking(0.65)
                     .foregroundStyle(Palette.muted)
                 Text("CPU \(MetricFormatter.percent(model.system.cpuUsage))")
@@ -4786,7 +5195,7 @@ private struct SzlauchPanel: View {
                 Spacer(minLength: 0)
                 InlineNavigationLabel(title: "PROCESY")
             }
-            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+            .font(.brand(size: 9.5, weight: .bold, design: .monospaced))
             .foregroundStyle(Palette.inbound)
             .monospacedDigit()
             .contentShape(Rectangle())
@@ -4830,6 +5239,24 @@ private struct SzlauchPanel: View {
 
 }
 
+private struct DetailHeading: View {
+    let title: String
+    let subtitle: String
+    let onBack: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(title).font(BrandFonts.heading(22)).foregroundStyle(Palette.ink)
+            Text(subtitle).font(.brand(size: 10)).foregroundStyle(Palette.muted).lineLimit(1)
+            Spacer(minLength: 4)
+            Button(action: onBack) {
+                InlineNavigationLabel(title: "WRÓĆ", backwards: true)
+            }
+            .buttonStyle(InlineActionButtonStyle())
+        }
+    }
+}
+
 private struct WeatherSummary: View {
     @ObservedObject var model: PulseModel
     @State private var query = ""
@@ -4839,26 +5266,24 @@ private struct WeatherSummary: View {
             HStack(spacing: 9) {
                 Button(action: model.openWeatherApp) {
                     HStack(spacing: 7) {
-                        WeatherGlyph(code: model.weather.weatherCode, size: 15)
+                        WeatherGlyph(code: model.weather.weatherCode, size: model.weatherDetailsShown ? 24 : 18, isDay: model.weather.isDay)
                         Text(WeatherDisplay.temperature(model.weather.temperature))
-                            .font(.system(size: 19).weight(.bold))
+                            .font(.brand(size: model.weatherDetailsShown ? 32 : 24, weight: .bold))
                             .monospacedDigit()
                             .foregroundStyle(Palette.ink)
-                            .contentTransition(.numericText())
-                            .animation(.easeOut(duration: 0.18), value: model.weather.temperature)
                     }
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 7)
-                .frame(height: 32)
+                .frame(height: model.weatherDetailsShown ? 48 : 40)
                 .help("Otwórz aplikację Pogoda")
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(summaryDescription)
-                        .font(.system(size: 11).weight(.bold))
+                        .font(.brand(size: 12, weight: .semibold))
                         .foregroundStyle(Palette.ink)
                     Text(model.weather.place?.name ?? model.weather.outlook)
-                        .font(.system(size: 9.5))
+                        .font(.brand(size: 9.5))
                         .foregroundStyle(Palette.muted)
                         .lineLimit(1)
                 }
@@ -4891,7 +5316,8 @@ private struct WeatherSummary: View {
     }
 
     private var summaryDescription: String {
-        WeatherService.rainNotice(for: model.weather.hours)?.compactText
+        if model.weather.isStale() { return "Prognoza nieaktualna" }
+        return WeatherService.rainNotice(for: model.weather.hours)?.compactText
             ?? WeatherDisplay.description(for: model.weather.weatherCode)
     }
 }
@@ -4907,16 +5333,17 @@ private struct WeatherDetails: View {
                 ZStack(alignment: .leading) {
                     if query.isEmpty {
                         Text("Inna miejscowość")
-                            .font(.system(size: 10.5))
+                            .font(.brand(size: 10.5))
                             .foregroundStyle(Palette.muted)
                             .padding(.leading, 8)
                     }
                     TextField("", text: $query)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 10.5))
+                        .font(.brand(size: 10.5))
                         .foregroundStyle(Palette.ink)
                         .padding(.horizontal, 8)
                         .onSubmit { model.searchWeather(query) }
+                        .snapshotFallback { Color.clear.frame(height: 25) }
                 }
                 .frame(height: 25)
                 .pulseGlass(radius: 9, interactive: true)
@@ -4929,7 +5356,7 @@ private struct WeatherDetails: View {
                     model.useDeviceLocation()
                 } label: {
                     Image(systemName: "location.fill")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.brand(size: 10, weight: .bold))
                         .frame(width: 19, height: 19)
                 }
                 .buttonStyle(PanelButtonStyle())
@@ -4938,7 +5365,7 @@ private struct WeatherDetails: View {
 
             HStack(alignment: .top, spacing: 7) {
                 Text(outlookText)
-                    .font(.system(size: 10))
+                    .font(.brand(size: 10))
                     .foregroundStyle(Palette.ink)
                     .lineLimit(2)
                 Spacer(minLength: 0)
@@ -4953,6 +5380,7 @@ private struct WeatherDetails: View {
                 .controlSize(.small)
                 .frame(width: 66)
                 .help("Zakres prognozy godzinowej")
+                .snapshotFallback { Label(range.rawValue, systemImage: "chevron.down").font(.brand(size: 10)).foregroundStyle(Palette.muted) }
             }
 
             HStack(spacing: 5) {
@@ -4960,20 +5388,21 @@ private struct WeatherDetails: View {
                     WeatherHourTile(hour: hour)
                 }
             }
-            .frame(height: 62)
+            .frame(height: 78)
 
             WeatherConditionsSection(
                 weather: model.weather,
                 hours: visibleHours,
                 range: range,
-                airQuality: model.airQuality
+                airQuality: model.airQuality,
+                airQualityLoading: model.airQualityLoading
             )
 
             HStack(spacing: 8) {
                 WeatherSourceMenu(model: model)
                 Spacer(minLength: 0)
                 Text("AQI: Open-Meteo")
-                    .font(.system(size: 8.5).weight(.medium))
+                    .font(.brand(size: 8.5).weight(.medium))
                     .foregroundStyle(Palette.muted)
             }
         }
@@ -5003,6 +5432,7 @@ private struct WeatherDetails: View {
     }
 
     private var outlookText: String {
+        if model.weather.isStale() { return "Nie udało się odświeżyć. To ostatnia prognoza." }
         let outlook = rangeSummaryText
         guard let fallbackFrom = model.weather.fallbackFrom else {
             return outlook
@@ -5037,17 +5467,18 @@ private struct WeatherSourceMenu: View {
         } label: {
             HStack(spacing: 5) {
                 Text("ŹRÓDŁO")
-                    .font(.system(size: 8.5).weight(.bold))
+                    .font(.brand(size: 8.5).weight(.bold))
                     .tracking(0.45)
                     .foregroundStyle(Palette.muted)
-                Text(model.weatherSource.shortLabel)
-                    .font(.system(size: 9).weight(.bold))
+                Text(model.weather.source.shortLabel)
+                    .font(.brand(size: 9).weight(.bold))
                     .foregroundStyle(Palette.strong)
             }
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Model prognozy pogody")
+        .snapshotFallback { Text("ŹRÓDŁO  \(model.weather.source.shortLabel)").font(.brand(size: 9.5)).foregroundStyle(Palette.muted) }
     }
 }
 
@@ -5056,11 +5487,12 @@ private struct WeatherConditionsSection: View {
     let hours: [ForecastHour]
     let range: ForecastRange
     let airQuality: AirQualitySnapshot?
+    var airQualityLoading: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text("WARUNKI")
-                .font(.system(size: 8.5).weight(.bold))
+                .font(.brand(size: 8.5).weight(.bold))
                 .tracking(0.55)
                 .foregroundStyle(Palette.muted)
 
@@ -5087,8 +5519,8 @@ private struct WeatherConditionsSection: View {
             )
             WeatherConditionRow(
                 title: "Powietrze",
-                value: airQuality?.qualityLabel ?? "czekam",
-                detail: airQuality?.detailText ?? "Open-Meteo AQI",
+                value: airQuality?.qualityLabel ?? (airQualityLoading ? "pobieram" : "--"),
+                detail: airQuality?.detailText ?? (airQualityLoading ? "Open-Meteo AQI" : "Brak odczytu AQI"),
                 color: airQualityColor
             )
         }
@@ -5110,7 +5542,8 @@ private struct WeatherConditionsSection: View {
         return "porywy \(WeatherDisplay.wind(gusts))"
     }
 
-    private var rainValue: String {
+    fileprivate var rainValue: String {
+        guard hours.contains(where: { $0.precipitation != nil || $0.precipitationProbability != nil }) else { return "--" }
         let total = hours.compactMap(\.precipitation).reduce(0, +)
         if total >= 0.1 {
             return WeatherDisplay.rainfall(total)
@@ -5164,16 +5597,16 @@ private struct WeatherConditionRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(title)
-                .font(.system(size: 9).weight(.semibold))
+                .font(.brand(size: 9).weight(.semibold))
                 .foregroundStyle(Palette.muted)
                 .frame(width: 58, alignment: .leading)
             Text(value)
-                .font(.system(size: 10).weight(.bold))
+                .font(.brand(size: 10).weight(.bold))
                 .foregroundStyle(color)
                 .monospacedDigit()
                 .frame(width: 64, alignment: .leading)
             Text(detail)
-                .font(.system(size: 8.5).weight(.medium))
+                .font(.brand(size: 8.5).weight(.medium))
                 .foregroundStyle(Palette.muted)
                 .lineLimit(1)
                 .minimumScaleFactor(0.78)
@@ -5189,21 +5622,21 @@ private struct WeatherHourTile: View {
     var body: some View {
         VStack(spacing: 3) {
             Text(hour.shortTime)
-                .font(.system(size: 9.5).weight(.bold))
+                .font(.brand(size: 9.5).weight(.bold))
                 .foregroundStyle(Palette.muted)
                 .monospacedDigit()
-            WeatherGlyph(code: hour.weatherCode, size: 11)
+            WeatherGlyph(code: hour.weatherCode, size: 18, isDay: hour.isDay)
             Text(WeatherDisplay.temperature(hour.temperature))
-                .font(.system(size: 10.5).weight(.bold))
+                .font(.brand(size: 16, weight: .bold))
                 .foregroundStyle(Palette.ink)
                 .monospacedDigit()
             Text(WeatherDisplay.precipitationLabel(for: hour))
-                .font(.system(size: 9).weight(.bold))
+                .font(.brand(size: 9).weight(.bold))
                 .foregroundStyle(Palette.muted)
                 .monospacedDigit()
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 62)
+        .frame(height: 78)
         .background(Palette.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
@@ -5215,31 +5648,15 @@ private struct CompactRateReadout: View {
     let color: Color
 
     var body: some View {
-        HStack(spacing: 7) {
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
-                    .font(.system(size: 8.5).weight(.bold))
-                    .tracking(0.6)
-                    .foregroundStyle(Palette.muted)
-                HStack(spacing: 4) {
-                    Image(systemName: symbol)
-                        .font(.system(size: 9, weight: .bold))
-                    Text(value)
-                        .font(.system(size: 14).weight(.bold))
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                        .animation(.easeOut(duration: 0.16), value: value)
-                }
-                .foregroundStyle(Palette.ink)
-            }
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 5) {
+            Label(label, systemImage: symbol)
+                .font(.brand(size: 9.5, weight: .semibold))
+                .tracking(0.5)
+                .foregroundStyle(color)
+            MeasurementValue(value: value, color: color)
         }
-        .padding(.horizontal, 9)
-        .frame(maxWidth: .infinity)
-        .frame(height: 37)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 44)
     }
 }
 
@@ -5273,7 +5690,7 @@ private struct CompactTransferHero: View {
                 prominent: false
             )
         }
-        .frame(height: 62)
+        .frame(height: 86)
     }
 }
 
@@ -5286,29 +5703,46 @@ private struct CompactHeroRate: View {
     let prominent: Bool
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            RateSparkline(samples: samples, color: color)
-                .frame(height: 29)
-                .frame(maxHeight: .infinity, alignment: .bottom)
-
-            VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(color)
                 Text(label)
-                    .font(.system(size: 8.5, weight: .bold))
-                    .tracking(0.7)
+                    .font(.brand(size: 9.5, weight: .semibold))
+                    .tracking(0.8)
                     .foregroundStyle(Palette.muted)
-                HStack(spacing: 4) {
-                    Image(systemName: symbol)
-                        .font(.system(size: prominent ? 11 : 10, weight: .bold))
-                    Text(value)
-                        .font(.system(size: prominent ? 18 : 16, weight: .bold))
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                        .animation(.easeOut(duration: 0.16), value: value)
-                }
-                .foregroundStyle(color)
             }
+            MeasurementValue(value: value, color: color, size: prominent ? 27 : 24)
+            RateSparkline(samples: samples, color: color)
+                .frame(height: 24)
+                .padding(.top, 2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct MeasurementValue: View {
+    let value: String
+    let color: Color
+    var size: CGFloat = 24
+
+    var body: some View {
+        let parts = value.split(separator: " ", maxSplits: 1)
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(String(parts.first ?? "--"))
+                .font(.brand(size: size, weight: .bold))
+                .foregroundStyle(Palette.ink)
+            if parts.count > 1 {
+                Text(String(parts[1]))
+                    .font(.brand(size: 10, weight: .semibold))
+                    .foregroundStyle(color)
+            }
+        }
+        .monospacedDigit()
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+        .accessibilityLabel(value)
     }
 }
 
@@ -5337,7 +5771,6 @@ private struct RateSparkline: View {
                         style: StrokeStyle(lineWidth: 1.15, lineCap: .round, lineJoin: .round)
                     )
             }
-            .animation(.easeOut(duration: 0.18), value: samples)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -5345,7 +5778,7 @@ private struct RateSparkline: View {
 
     private func chartPoints(in size: CGSize) -> [CGPoint] {
         let values = Array(repeating: 0.0, count: max(0, Self.sampleCapacity - samples.count)) + samples
-        let scaled = values.map { log1p(max(0, $0)) }
+        let scaled = values.map { max(0, $0) }
         let peak = max(scaled.max() ?? 0, 1)
         let denominator = CGFloat(max(scaled.count - 1, 1))
         return scaled.enumerated().map { index, value in
@@ -5390,12 +5823,12 @@ private struct WiFiNetworkPicker: View {
 
             if let network = model.wifiPasswordRequest {
                 Text("Hasło do \(network.name)")
-                    .font(.system(size: 10).weight(.bold))
+                    .font(.brand(size: 10).weight(.bold))
                     .foregroundStyle(Palette.ink)
                 HStack(spacing: 6) {
                     SecureField("Hasło Wi-Fi", text: $password)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 10.5))
+                        .font(.brand(size: 10.5))
                         .padding(.horizontal, 8)
                         .frame(height: 26)
                         .pulseGlass(radius: 9, interactive: true)
@@ -5415,7 +5848,7 @@ private struct WiFiNetworkPicker: View {
 
                 HStack {
                     Text("DOSTĘPNE SIECI")
-                        .font(.system(size: 8.5).weight(.bold))
+                        .font(.brand(size: 8.5).weight(.bold))
                         .tracking(0.55)
                         .foregroundStyle(Palette.muted)
                     Spacer()
@@ -5423,7 +5856,7 @@ private struct WiFiNetworkPicker: View {
                         model.scanWiFiNetworks()
                     } label: {
                         Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.brand(size: 9, weight: .bold))
                     }
                     .buttonStyle(PanelButtonStyle())
                     .disabled(model.wifiScanInProgress || model.wifiAwaitingLocationAccess)
@@ -5431,7 +5864,7 @@ private struct WiFiNetworkPicker: View {
 
                 if model.wifiAwaitingLocationAccess {
                     Text("Potwierdź dostęp w oknie macOS, aby zobaczyć nazwy sieci.")
-                        .font(.system(size: 9.5))
+                        .font(.brand(size: 9.5))
                         .foregroundStyle(Palette.muted)
                         .frame(height: 28)
                 } else if model.wifiNeedsLocationAccess {
@@ -5443,7 +5876,7 @@ private struct WiFiNetworkPicker: View {
                             Spacer(minLength: 4)
                             Image(systemName: "arrow.up.forward.app")
                         }
-                        .font(.system(size: 9.5, weight: .medium))
+                        .font(.brand(size: 9.5, weight: .medium))
                         .foregroundStyle(Palette.strong)
                         .padding(.horizontal, 8)
                         .frame(height: 30)
@@ -5453,12 +5886,12 @@ private struct WiFiNetworkPicker: View {
                     .help("Otwórz Ustawienia systemowe")
                 } else if model.wifiScanInProgress && model.wifiNetworks.isEmpty {
                     Text("Szukam pobliskich sieci...")
-                        .font(.system(size: 10))
+                        .font(.brand(size: 10))
                         .foregroundStyle(Palette.muted)
                         .frame(height: 28)
                 } else if model.wifiNetworks.isEmpty {
                     Text("Nie znaleziono pobliskich sieci.")
-                        .font(.system(size: 10))
+                        .font(.brand(size: 10))
                         .foregroundStyle(Palette.muted)
                         .frame(height: 28)
                 } else {
@@ -5475,18 +5908,22 @@ private struct WiFiNetworkPicker: View {
                             }
                         }
                     }
-                    .frame(maxHeight: 130)
+                    .frame(maxHeight: 215)
                 }
             }
 
             if let error = model.wifiConnectionError {
+                if let option = model.wifiPasswordCandidate {
+                    Button("Użyj hasła") { model.requestWiFiPassword(option) }
+                        .buttonStyle(InlineActionButtonStyle())
+                }
                 Text(error)
-                    .font(.system(size: 9))
+                    .font(.brand(size: 9))
                     .foregroundStyle(Palette.danger)
                     .lineLimit(2)
             } else {
                 Text("Po wybraniu zabezpieczonej sieci hasło pojawi się tylko, gdy jest potrzebne.")
-                    .font(.system(size: 8))
+                    .font(.brand(size: 8))
                     .foregroundStyle(Palette.muted)
                     .lineLimit(1)
             }
@@ -5500,7 +5937,7 @@ private struct WiFiNetworkPicker: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("HOTSPOT OSOBISTY")
-                    .font(.system(size: 8.5).weight(.bold))
+                    .font(.brand(size: 8.5).weight(.bold))
                     .tracking(0.55)
                     .foregroundStyle(Palette.muted)
                 Spacer()
@@ -5515,7 +5952,7 @@ private struct WiFiNetworkPicker: View {
                 HStack(spacing: 6) {
                     TextField("Nazwa hotspotu telefonu", text: $hotspotName)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 10.5))
+                        .font(.brand(size: 10.5))
                         .padding(.horizontal, 8)
                         .frame(height: 27)
                         .pulseGlass(radius: 9, interactive: true)
@@ -5536,7 +5973,7 @@ private struct WiFiNetworkPicker: View {
                 }
             } else {
                 Text("Ustaw telefon raz, potem przełączaj się jednym kliknięciem.")
-                    .font(.system(size: 9.5))
+                    .font(.brand(size: 9.5))
                     .foregroundStyle(Palette.muted)
                     .frame(height: 27)
             }
@@ -5567,16 +6004,16 @@ private struct PersonalHotspotRow: View {
         Button(action: action) {
             HStack(spacing: 7) {
                 Image(systemName: "personalhotspot")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.brand(size: 10, weight: .semibold))
                     .foregroundStyle(Palette.strong)
                     .frame(width: 15)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(name)
-                        .font(.system(size: 10.5).weight(.bold))
+                        .font(.brand(size: 10.5).weight(.bold))
                         .foregroundStyle(Palette.ink)
                         .lineLimit(1)
                     Text(selected ? "Połączono" : "Połącz z telefonem")
-                        .font(.system(size: 8.5, weight: .medium))
+                        .font(.brand(size: 8.5, weight: .medium))
                         .foregroundStyle(Palette.muted)
                 }
                 Spacer(minLength: 4)
@@ -5591,7 +6028,7 @@ private struct PersonalHotspotRow: View {
                         .foregroundStyle(Palette.strong)
                 }
             }
-            .font(.system(size: 9).weight(.semibold))
+            .font(.brand(size: 9).weight(.semibold))
             .padding(.horizontal, 8)
             .frame(height: 34)
             .background(
@@ -5614,17 +6051,17 @@ private struct WiFiNetworkRow: View {
         Button(action: action) {
             HStack(spacing: 7) {
                 Image(systemName: network.signalSymbol)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.brand(size: 10, weight: .semibold))
                     .foregroundStyle(network.signal <= -78 ? Palette.warning : Palette.strong)
                     .frame(width: 15)
                 Text(network.name)
-                    .font(.system(size: 10.5).weight(selected ? .bold : .medium))
+                    .font(.brand(size: 10.5).weight(selected ? .bold : .medium))
                     .foregroundStyle(Palette.ink)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 if network.secured {
                     Image(systemName: "lock.fill")
-                        .font(.system(size: 8, weight: .semibold))
+                        .font(.brand(size: 8, weight: .semibold))
                         .foregroundStyle(Palette.muted)
                 }
                 if connecting {
@@ -5635,7 +6072,7 @@ private struct WiFiNetworkRow: View {
                         .foregroundStyle(Palette.strong)
                 }
             }
-            .font(.system(size: 9).weight(.semibold))
+            .font(.brand(size: 9).weight(.semibold))
             .padding(.horizontal, 8)
             .frame(height: 27)
             .background(
@@ -5677,14 +6114,7 @@ private struct TrafficDetails: View {
                 }
                 Spacer(minLength: 0)
                 RateUnitPicker(unit: model.rateUnit, onSelect: model.setRateUnit)
-                Button {
-                    withAnimation(PanelMotion.navigation) {
-                        model.toggleTrafficDetails()
-                    }
-                } label: {
-                    InlineNavigationLabel(title: "WRÓĆ", backwards: true)
-                }
-                .buttonStyle(InlineActionButtonStyle())
+
             }
 
             TrafficDetailChart(
@@ -5693,7 +6123,7 @@ private struct TrafficDetails: View {
                 end: window.end,
                 unit: model.rateUnit
             )
-                .frame(height: 92)
+                .frame(height: 132)
                 .background(Palette.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             HStack(spacing: 6) {
@@ -5723,7 +6153,7 @@ private struct TrafficDetails: View {
                 "Średnia zakresu: ↓ \(RateFormatter.detailed(window.averageDownload, unit: model.rateUnit))"
                     + "  ↑ \(RateFormatter.detailed(window.averageUpload, unit: model.rateUnit))"
             )
-            .font(.system(size: 8.5))
+            .font(.brand(size: 8.5))
             .foregroundStyle(Palette.muted)
             .monospacedDigit()
 
@@ -5754,74 +6184,97 @@ private struct RateUnitPicker: View {
             }
         } label: {
             Text(unit.rawValue)
-                .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                .font(.brand(size: 8.5, weight: .semibold, design: .monospaced))
                 .frame(minWidth: 36)
         }
-        .menuStyle(.button)
-        .controlSize(.mini)
+        .menuStyle(.borderlessButton)
+        .controlSize(.small)
         .frame(width: 62)
         .tint(Palette.muted)
         .accessibilityLabel("Jednostka transferu")
         .help("MB/s: megabajty. Mb/s: megabity używane w prędkościach łącza.")
+        .snapshotFallback { Label(unit.rawValue, systemImage: "chevron.down").font(.brand(size: 10)).foregroundStyle(Palette.muted) }
     }
 }
 
 private struct SystemDetails: View {
     @ObservedObject var model: PulseModel
 
-    private var peakCore: (number: Int, usage: Double)? {
-        guard let peak = model.system.coreUsages.enumerated().max(by: { $0.element < $1.element }) else {
-            return nil
-        }
-        return (number: peak.offset + 1, usage: peak.element)
+    private var values: [ProcessUsage] {
+        model.processSort == .cpu ? model.system.cpuProcesses : model.system.memoryProcesses
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Rectangle()
-                .fill(Palette.line)
-                .frame(height: 1)
-
             HStack {
-                Text("RDZENIE")
-                    .font(.system(size: 8.5).weight(.bold))
-                    .tracking(0.55)
-                    .foregroundStyle(Palette.muted)
+                Text("RDZENIE").tracking(0.7)
                 Spacer()
-                if let peakCore {
-                    Text("MAX \(MetricFormatter.percent(peakCore.usage)) · #\(peakCore.number)")
-                        .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Palette.muted)
-                        .monospacedDigit()
-                        .padding(.trailing, 3)
-                }
-                Button {
-                    withAnimation(PanelMotion.navigation) {
-                        model.toggleSystemDetails()
-                    }
-                } label: {
-                    InlineNavigationLabel(title: "WRÓĆ", backwards: true)
-                }
-                .buttonStyle(InlineActionButtonStyle())
+                Text("\(model.system.coreUsages.count) rdzeni")
             }
-
+            .font(.brand(size: 9.5))
+            .foregroundStyle(Palette.muted)
             CoreUsageSkyline(usages: model.system.coreUsages)
 
-            HStack(alignment: .top, spacing: 7) {
-                ProcessColumn(
-                    title: "CPU · APLIKACJE",
-                    values: model.system.cpuProcesses,
-                    value: { "\(Int($0.cpu.rounded()))%" }
-                )
-                ProcessColumn(
-                    title: "RAM · APLIKACJE",
-                    values: model.system.memoryProcesses,
-                    value: { MetricFormatter.applicationMemory($0.memoryBytes) }
-                )
+            HStack(spacing: 18) {
+                ForEach(ProcessSort.allCases, id: \.rawValue) { sort in
+                    Button {
+                        model.processSort = sort
+                    } label: {
+                        Text(sort == .cpu ? "Procesor" : "Pamięć")
+                            .font(.brand(size: 12, weight: model.processSort == sort ? .bold : .regular))
+                            .foregroundStyle(model.processSort == sort ? Palette.ink : Palette.muted)
+                            .padding(.vertical, 5)
+                            .overlay(alignment: .bottom) {
+                                if model.processSort == sort {
+                                    Rectangle().fill(Palette.strong).frame(height: 2)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(model.processSort == sort ? [.isSelected] : [])
+                }
+                Spacer()
+                Text("TOP \(values.count)")
+                    .font(.brand(size: 9.5))
+                    .foregroundStyle(Palette.muted)
             }
 
-            Text("Aplikacje odświeżane co 5 s tylko w tym widoku.")
-                .font(.system(size: 9))
+            if values.isEmpty {
+                Text("Odczytuję procesy...")
+                    .font(.brand(size: 12))
+                    .foregroundStyle(Palette.muted)
+                    .frame(height: 100, alignment: .topLeading)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(values.enumerated()), id: \.element.id) { index, process in
+                        HStack(spacing: 9) {
+                            Text(String(index + 1))
+                                .font(.brand(size: 9.5))
+                                .foregroundStyle(Palette.muted)
+                                .frame(width: 12, alignment: .leading)
+                            Text(process.name)
+                                .font(.brand(size: 12, weight: .semibold))
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text(model.processSort == .cpu
+                                 ? "\(Int(process.cpu.rounded()))%"
+                                 : MetricFormatter.applicationMemory(process.memoryBytes))
+                                .font(.brand(size: 12, weight: .bold))
+                                .monospacedDigit()
+                                .foregroundStyle(index == 0 ? Palette.strong : Palette.ink)
+                        }
+                        .foregroundStyle(Palette.ink)
+                        .frame(height: 22)
+                        .overlay(alignment: .bottom) {
+                            Rectangle().fill(Palette.line.opacity(0.45)).frame(height: 0.5)
+                        }
+                    }
+                }
+            }
+            Text(model.processSort == .cpu
+                 ? "Co 5 s · 100% CPU oznacza jeden rdzeń."
+                 : "Co 5 s · pamięć rezydentna procesów (RSS).")
+                .font(.brand(size: 9.5))
                 .foregroundStyle(Palette.muted)
         }
     }
@@ -5833,7 +6286,7 @@ private struct CoreUsageSkyline: View {
     var body: some View {
         if usages.isEmpty {
             Text("Odczytuję rdzenie...")
-                .font(.system(size: 9))
+                .font(.brand(size: 9))
                 .foregroundStyle(Palette.muted)
                 .frame(height: 34, alignment: .leading)
         } else {
@@ -5863,49 +6316,14 @@ private struct CoreUsageMeter: View {
             }
             .frame(width: 5, height: 24)
             Text("\(index + 1)")
-                .font(.system(size: 8).weight(.semibold))
+                .font(.brand(size: 8).weight(.semibold))
                 .foregroundStyle(Palette.muted)
         }
         .frame(height: 34)
     }
 }
 
-private struct ProcessColumn: View {
-    let title: String
-    let values: [ProcessUsage]
-    let value: (ProcessUsage) -> String
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title)
-                .font(.system(size: 8.5).weight(.bold))
-                .tracking(0.35)
-                .foregroundStyle(Palette.muted)
-            if values.isEmpty {
-                Text("Odczytuję...")
-                    .font(.system(size: 9))
-                    .foregroundStyle(Palette.muted)
-                    .frame(height: 64, alignment: .topLeading)
-            } else {
-                ForEach(values) { process in
-                    HStack(spacing: 4) {
-                        Text(process.name)
-                            .lineLimit(1)
-                        Spacer(minLength: 3)
-                        Text(value(process))
-                            .monospacedDigit()
-                    }
-                    .font(.system(size: 10).weight(.medium))
-                    .foregroundStyle(Palette.ink)
-                }
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.surface, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-    }
-}
 
 private struct TrafficDetailChart: View {
     let samples: [TrafficChartSample]
@@ -5917,7 +6335,7 @@ private struct TrafficDetailChart: View {
     private let rightInset: CGFloat = 7
     private let topInset: CGFloat = 16
     private let bottomInset: CGFloat = 18
-    private let horizontalLevels = [1.0, 0.5, 0.0]
+    private let horizontalLevels = [1.0, 0.75, 0.5, 0.25, 0.0]
     private let verticalLevels = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]
 
     var body: some View {
@@ -5934,7 +6352,7 @@ private struct TrafficDetailChart: View {
 
             ZStack(alignment: .topLeading) {
                 Text(unit.rawValue)
-                    .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                    .font(.brand(size: 8.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(Palette.muted)
                     .frame(width: axisWidth - 7, alignment: .trailing)
                     .position(x: (axisWidth - 7) / 2, y: 6)
@@ -5942,7 +6360,7 @@ private struct TrafficDetailChart: View {
                 ForEach(horizontalLevels, id: \.self) { level in
                     let y = plot.minY + CGFloat(1 - level) * plot.height
                     Text(RateFormatter.axisValue(maximum * level, unit: unit))
-                        .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                        .font(.brand(size: 8.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(Palette.muted)
                         .frame(width: axisWidth - 7, alignment: .trailing)
                         .position(x: (axisWidth - 7) / 2, y: y)
@@ -5951,7 +6369,7 @@ private struct TrafficDetailChart: View {
                         path.addLine(to: CGPoint(x: plot.maxX, y: y))
                     }
                     .stroke(
-                        Palette.line.opacity(level == 0 ? 0.72 : 0.48),
+                        Palette.line.opacity(level == 0 ? 1.0 : 0.7),
                         style: StrokeStyle(lineWidth: 0.6, dash: level == 0 ? [] : [2, 3])
                     )
                 }
@@ -5964,7 +6382,7 @@ private struct TrafficDetailChart: View {
                     }
                     .stroke(Palette.line.opacity(0.26), style: StrokeStyle(lineWidth: 0.5, dash: [2, 4]))
                     Text(timeLabel(at: level))
-                        .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                        .font(.brand(size: 8.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(Palette.muted)
                         .frame(width: 37)
                         .position(x: timeLabelPosition(for: level, in: plot), y: plot.maxY + 10)
@@ -5972,7 +6390,7 @@ private struct TrafficDetailChart: View {
 
                 if samples.isEmpty {
                     Text("Zbieram próbki co 5 s")
-                        .font(.system(size: 8.5, weight: .medium))
+                        .font(.brand(size: 8.5, weight: .medium))
                         .foregroundStyle(Palette.muted)
                         .position(x: plot.midX, y: plot.midY)
                 } else {
@@ -5998,8 +6416,6 @@ private struct TrafficDetailChart: View {
                         .stroke(Palette.outbound.opacity(0.96), style: chartStroke)
                 }
             }
-            .animation(.easeOut(duration: 0.18), value: samples.map(\.download))
-            .animation(.easeOut(duration: 0.18), value: samples.map(\.upload))
         }
         .allowsHitTesting(false)
         .accessibilityElement(children: .ignore)
@@ -6012,7 +6428,7 @@ private struct TrafficDetailChart: View {
             samples.map(\.upload).max() ?? 0,
             1024
         )
-        let unit = peak >= 1024 * 1024 ? 1024.0 * 1024 : 1024.0
+        let unit = peak >= 1_000_000 ? 1_000_000.0 : 1_000.0
         let scaled = peak / unit
         let magnitude = pow(10, floor(log10(max(scaled, 1))))
         let normalized = scaled / magnitude
@@ -6096,11 +6512,11 @@ private struct TrafficMetric: View {
                     .frame(width: 5, height: 5)
                 Text(title)
             }
-            .font(.system(size: 8.5).weight(.bold))
+            .font(.brand(size: 8.5).weight(.bold))
             .tracking(0.3)
             .foregroundStyle(Palette.muted)
             Text(value)
-                .font(.system(size: 9).weight(.semibold))
+                .font(.brand(size: 9).weight(.semibold))
                 .monospacedDigit()
                 .foregroundStyle(Palette.ink)
                 .lineLimit(1)
@@ -6126,12 +6542,12 @@ private struct TodayTrafficSummary: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text("DZIŚ · CAŁY RUCH")
-                    .font(.system(size: 8.5).weight(.bold))
+                    .font(.brand(size: 8.5).weight(.bold))
                     .tracking(0.5)
                     .foregroundStyle(Palette.muted)
                 Spacer()
                 Text("↓ \(MetricFormatter.mobileData(all.download))  ↑ \(MetricFormatter.mobileData(all.upload))")
-                    .font(.system(size: 10).weight(.bold))
+                    .font(.brand(size: 10).weight(.bold))
                     .monospacedDigit()
                     .foregroundStyle(Palette.ink)
             }
@@ -6141,7 +6557,7 @@ private struct TodayTrafficSummary: View {
                 routeRow("Inne", route: .other, totals: other, color: Palette.muted)
             }
             Text("Cały ruch = Wi-Fi + hotspot + inne · pomiar lokalny.")
-                .font(.system(size: 8.5))
+                .font(.brand(size: 8.5))
                 .foregroundStyle(Palette.muted)
         }
         .padding(.horizontal, 8)
@@ -6163,7 +6579,7 @@ private struct TodayTrafficSummary: View {
                 .foregroundStyle(Palette.muted)
             if activeRoute == route {
                 Text("TERAZ")
-                    .font(.system(size: 7.5).weight(.bold))
+                    .font(.brand(size: 7.5).weight(.bold))
                     .tracking(0.35)
                     .foregroundStyle(color)
                     .padding(.horizontal, 4)
@@ -6174,7 +6590,7 @@ private struct TodayTrafficSummary: View {
             Text("↓ \(MetricFormatter.mobileData(totals.download))   ↑ \(MetricFormatter.mobileData(totals.upload))")
                 .foregroundStyle(Palette.ink)
         }
-        .font(.system(size: 8.5).weight(.semibold))
+        .font(.brand(size: 8.5).weight(.semibold))
         .monospacedDigit()
         .lineLimit(1)
     }
@@ -6190,16 +6606,14 @@ private struct CompactMetric: View {
         VStack(spacing: 5) {
             HStack {
                 Text(title)
-                    .font(.system(size: 9).weight(.bold))
+                    .font(.brand(size: 9).weight(.bold))
                     .tracking(0.6)
                     .foregroundStyle(Palette.muted)
                 Spacer()
                 Text(value)
-                    .font(.system(size: 13).weight(.bold))
+                    .font(.brand(size: 20, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(Palette.ink)
-                    .contentTransition(.numericText())
-                    .animation(.easeOut(duration: 0.16), value: value)
             }
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
@@ -6214,11 +6628,12 @@ private struct CompactMetric: View {
         }
         .padding(.horizontal, 4)
         .frame(maxWidth: .infinity)
-        .frame(height: 38)
+        .frame(height: 42)
     }
 }
 
 private struct CompactHotspotRow: View {
+    @State private var resetConfirmationShown = false
     let history: TrafficHistoryState
     let connectionCost: ConnectionCost
     let expanded: Bool
@@ -6239,27 +6654,20 @@ private struct CompactHotspotRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 7) {
-                Text(expanded ? "HOTSPOT · 7 DNI" : "HOTSPOT · DZIŚ")
-                    .font(.system(size: 9).weight(.bold))
-                    .tracking(0.6)
-                    .foregroundStyle(Palette.muted)
-                Circle()
-                    .fill(connectionCost.isMetered ? Palette.action : Palette.line)
-                    .frame(width: 6, height: 6)
-                Text(connectionCost.isMetered ? "TERAZ" : "POZA HOTSPOTEM")
-                    .font(.system(size: 8.5).weight(.bold))
-                    .foregroundStyle(Palette.muted)
-                Spacer()
-                Button {
-                    onToggle()
-                } label: {
-                    InlineNavigationLabel(
-                        title: expanded ? "WRÓĆ" : "7 DNI",
-                        backwards: expanded
-                    )
+            if !expanded {
+                HStack(spacing: 7) {
+                    Image(systemName: "personalhotspot")
+                        .foregroundStyle(connectionCost.isMetered ? Palette.strong : Palette.muted)
+                    Text("Hotspot")
+                        .font(.brand(size: 11, weight: .semibold))
+                        .foregroundStyle(Palette.ink)
+                    Text(connectionCost.isMetered ? "teraz" : "dzisiaj")
+                        .font(.brand(size: 10))
+                        .foregroundStyle(Palette.muted)
+                    Spacer()
+                    Button(action: onToggle) { InlineNavigationLabel(title: "7 DNI") }
+                        .buttonStyle(InlineActionButtonStyle())
                 }
-                .buttonStyle(InlineActionButtonStyle())
             }
 
             if expanded {
@@ -6272,7 +6680,7 @@ private struct CompactHotspotRow: View {
                         .frame(width: 62, alignment: .trailing)
                         .foregroundStyle(Palette.outbound)
                 }
-                .font(.system(size: 7.5).weight(.bold))
+                .font(.brand(size: 9.5, weight: .semibold))
                 .tracking(0.35)
                 .foregroundStyle(Palette.muted)
 
@@ -6282,11 +6690,11 @@ private struct CompactHotspotRow: View {
 
                 HStack {
                     Text("Pomiar lokalny · historia 31 dni")
-                        .font(.system(size: 8.5))
+                        .font(.brand(size: 8.5))
                         .foregroundStyle(Palette.muted)
                     Spacer()
                     Button("Wyczyść") {
-                        onReset()
+                        resetConfirmationShown = true
                     }
                     .buttonStyle(PanelButtonStyle())
                     .help("Wyzeruj dzienną historię hotspotu")
@@ -6294,25 +6702,31 @@ private struct CompactHotspotRow: View {
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
                     Text("↓ \(MetricFormatter.mobileData(today.download))")
-                        .font(.system(size: 12).weight(.bold))
+                        .font(.brand(size: 12).weight(.bold))
                         .foregroundStyle(Palette.inbound)
                     Text("pobrano")
-                        .font(.system(size: 9))
+                        .font(.brand(size: 9))
                         .foregroundStyle(Palette.muted)
                     Spacer()
                     Text("↑ \(MetricFormatter.mobileData(today.upload))")
-                        .font(.system(size: 10).weight(.semibold))
+                        .font(.brand(size: 10).weight(.semibold))
                         .foregroundStyle(Palette.outbound)
                     Text("wysłano")
-                        .font(.system(size: 9))
+                        .font(.brand(size: 9))
                         .foregroundStyle(Palette.muted)
                 }
                 .monospacedDigit()
             }
         }
-        .padding(.horizontal, 9)
-        .padding(.top, 9)
+        .padding(.horizontal, 0)
+        .padding(.top, expanded ? 8 : 10)
         .padding(.bottom, 3)
+        .confirmationDialog("Wyzerować statystyki hotspotu?", isPresented: $resetConfirmationShown) {
+            Button("Wyzeruj hotspot", role: .destructive, action: onReset)
+            Button("Anuluj", role: .cancel) {}
+        } message: {
+            Text("Zaczniesz liczyć hotspot od teraz. Historia całego ruchu Maca pozostanie bez zmian.")
+        }
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(Palette.line)
@@ -6341,9 +6755,10 @@ private struct HotspotDayRow: View {
     var body: some View {
         HStack(spacing: 7) {
             Text(label)
-                .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                .font(.brand(size: 9.5))
                 .foregroundStyle(Palette.muted)
-                .frame(width: 64, alignment: .leading)
+                .lineLimit(1)
+                .frame(width: 76, alignment: .leading)
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     Capsule()
@@ -6357,7 +6772,8 @@ private struct HotspotDayRow: View {
                         )
                 }
             }
-            .frame(width: 52, height: 3)
+            .frame(maxWidth: .infinity)
+            .frame(height: 3)
             Spacer(minLength: 2)
             Text(MetricFormatter.mobileData(usage.totals.download))
                 .foregroundStyle(Palette.ink)
@@ -6366,9 +6782,9 @@ private struct HotspotDayRow: View {
                 .foregroundStyle(Palette.muted)
                 .frame(width: 62, alignment: .trailing)
         }
-        .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+        .font(.brand(size: 11, weight: .semibold))
         .monospacedDigit()
-        .frame(height: 13)
+        .frame(height: 31)
     }
 }
 
@@ -6389,14 +6805,14 @@ private struct CompactToggleCard: View {
         ) {
             HStack(spacing: 7) {
                 Image(systemName: symbol)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.brand(size: 12, weight: .semibold))
                     .foregroundStyle(isOn ? Palette.strong : Palette.muted)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 10.5).weight(.bold))
+                        .font(.brand(size: 10.5).weight(.bold))
                         .foregroundStyle(Palette.ink)
                     Text(subtitle)
-                        .font(.system(size: 9))
+                        .font(.brand(size: 9))
                         .foregroundStyle(Palette.muted)
                         .lineLimit(1)
                 }
@@ -6405,6 +6821,17 @@ private struct CompactToggleCard: View {
         }
         .toggleStyle(SwitchToggleStyle(tint: Palette.action))
         .controlSize(.small)
+        .snapshotFallback {
+            HStack(spacing: 7) {
+                Image(systemName: symbol).foregroundStyle(Palette.strong)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.brand(size: 10.5, weight: .bold)).foregroundStyle(Palette.ink)
+                    Text(subtitle).font(.brand(size: 9.5)).foregroundStyle(Palette.muted).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                SnapshotSwitch(isOn: isOn)
+            }
+        }
         .padding(.horizontal, 9)
         .frame(maxWidth: .infinity)
         .frame(height: 48)
@@ -6419,14 +6846,14 @@ private struct CompactSleepCard: View {
     var body: some View {
         HStack(spacing: 7) {
             Image(systemName: "moon.fill")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.brand(size: 12, weight: .semibold))
                 .foregroundStyle(model.sleep.mode.isPreventingSleep ? Palette.strong : Palette.muted)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Nie usypiaj")
-                    .font(.system(size: 10.5).weight(.bold))
+                    .font(.brand(size: 10.5).weight(.bold))
                     .foregroundStyle(Palette.ink)
                 Text(model.sleep.mode.label)
-                    .font(.system(size: 9))
+                    .font(.brand(size: 9))
                     .foregroundStyle(Palette.muted)
             }
             Spacer(minLength: 1)
@@ -6436,12 +6863,13 @@ private struct CompactSleepCard: View {
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.brand(size: 10, weight: .semibold))
                     .foregroundStyle(Palette.muted)
             }
             .menuStyle(.borderlessButton)
             .frame(width: 16)
             .help("Usuń zgodę do przełączania blokady uśpienia")
+            .snapshotFallback { Image(systemName: "ellipsis.circle").foregroundStyle(Palette.muted) }
 
             Toggle(
                 "",
@@ -6453,6 +6881,7 @@ private struct CompactSleepCard: View {
             .labelsHidden()
             .toggleStyle(SwitchToggleStyle(tint: Palette.action))
             .controlSize(.small)
+            .snapshotFallback { SnapshotSwitch(isOn: model.sleep.mode.isPreventingSleep) }
         }
         .padding(.horizontal, 9)
         .frame(maxWidth: .infinity)
@@ -6471,14 +6900,14 @@ private struct CompactConfigureSleepCard: View {
         } label: {
             HStack(spacing: 7) {
                 Image(systemName: "moon.fill")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.brand(size: 12, weight: .semibold))
                     .foregroundStyle(Palette.strong)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Nie usypiaj")
-                        .font(.system(size: 10.5).weight(.bold))
+                        .font(.brand(size: 10.5).weight(.bold))
                         .foregroundStyle(Palette.ink)
                     Text("Zgoda raz")
-                        .font(.system(size: 9))
+                        .font(.brand(size: 9))
                         .foregroundStyle(Palette.muted)
                 }
                 Spacer()
@@ -6492,6 +6921,18 @@ private struct CompactConfigureSleepCard: View {
     }
 }
 
+// Only used by --snapshot: ImageRenderer does not render AppKit-backed switches.
+private struct SnapshotSwitch: View {
+    let isOn: Bool
+
+    var body: some View {
+        Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
+            .font(.system(size: 20))
+            .foregroundStyle(isOn ? Palette.strong : Palette.muted)
+            .frame(width: 32, height: 22)
+    }
+}
+
 private struct SleepPermissionPrompt: View {
     @ObservedObject var model: PulseModel
 
@@ -6499,15 +6940,15 @@ private struct SleepPermissionPrompt: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "lock.shield.fill")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.brand(size: 13, weight: .semibold))
                     .foregroundStyle(Palette.strong)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Jednorazowa zgoda macOS")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.brand(size: 11, weight: .bold))
                         .foregroundStyle(Palette.ink)
                     Text("Hasło wpisujesz w oknie systemu. Szlauch go nie widzi ani nie zapisuje; zgoda służy tylko do przełączania blokady uśpienia.")
-                        .font(.system(size: 9.5, weight: .medium))
+                        .font(.brand(size: 9.5, weight: .medium))
                         .foregroundStyle(Palette.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -6545,20 +6986,20 @@ private struct RateReadout: View {
                     .fill(color)
                     .frame(width: 8, height: 8)
                 Text(label)
-                    .font(.system(size: 10).weight(.bold))
+                    .font(.brand(size: 10).weight(.bold))
                     .tracking(0.7)
                     .foregroundStyle(Palette.muted)
             }
             HStack(spacing: 5) {
                 Image(systemName: symbol)
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.brand(size: 11, weight: .bold))
                 Text(value)
-                    .font(.system(size: 17).weight(.bold))
+                    .font(.brand(size: 17).weight(.bold))
                     .monospacedDigit()
             }
             .foregroundStyle(Palette.ink)
             Text("Śr. 5 s \(average)")
-                .font(.system(size: 11))
+                .font(.brand(size: 11))
                 .foregroundStyle(Palette.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -6575,12 +7016,12 @@ private struct SystemMetric: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
                 Text(title)
-                    .font(.system(size: 10).weight(.bold))
+                    .font(.brand(size: 10).weight(.bold))
                     .tracking(0.7)
                     .foregroundStyle(Palette.muted)
                 Spacer()
                 Text(value)
-                    .font(.system(size: 15).weight(.bold))
+                    .font(.brand(size: 15).weight(.bold))
                     .monospacedDigit()
                     .foregroundStyle(Palette.ink)
             }
@@ -6595,7 +7036,7 @@ private struct SystemMetric: View {
             }
             .frame(height: 4)
             Text(detail)
-                .font(.system(size: 10.5))
+                .font(.brand(size: 10.5))
                 .foregroundStyle(Palette.muted)
                 .monospacedDigit()
         }
@@ -6633,7 +7074,7 @@ private struct InlineNavigationLabel: View {
                 Image(systemName: "chevron.right")
             }
         }
-        .font(.system(size: 9.5, weight: .bold))
+        .font(.brand(size: 9.5, weight: .bold))
         .tracking(0.45)
     }
 }
@@ -6650,7 +7091,7 @@ private struct InlineActionButtonStyle: ButtonStyle {
 private struct PanelButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 10, weight: .semibold))
+            .font(.brand(size: 10, weight: .semibold))
             .foregroundStyle(Palette.ink)
             .padding(.horizontal, 8)
             .frame(height: 24)
@@ -6677,16 +7118,16 @@ private struct PanelSwitchRow: View {
         Button(action: action) {
             HStack(spacing: 11) {
                 Image(systemName: symbol)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.brand(size: 14, weight: .semibold))
                     .foregroundStyle(Palette.strong)
                     .frame(width: 21)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
-                        .font(.system(size: 14).weight(.bold))
+                        .font(.brand(size: 14).weight(.bold))
                         .foregroundStyle(Palette.ink)
                     Text(subtitle)
-                        .font(.system(size: 11.5))
+                        .font(.brand(size: 11.5))
                         .foregroundStyle(Palette.muted)
                         .lineLimit(1)
                 }
@@ -6726,15 +7167,15 @@ private struct ConfigureSleepRow: View {
     var body: some View {
         HStack(spacing: 11) {
             Image(systemName: "lock.shield")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.brand(size: 14, weight: .semibold))
                 .foregroundStyle(Palette.strong)
                 .frame(width: 21)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Sterowanie sleep")
-                    .font(.system(size: 14).weight(.bold))
+                    .font(.brand(size: 14).weight(.bold))
                     .foregroundStyle(Palette.ink)
                 Text("Wymaga jednej zgody administratora")
-                    .font(.system(size: 11.5))
+                    .font(.brand(size: 11.5))
                     .foregroundStyle(Palette.muted)
             }
             Spacer()
@@ -6751,26 +7192,37 @@ private struct ConfigureSleepRow: View {
 
 private struct BannerView: View {
     let banner: MessageBanner
+    let onDismiss: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             Image(systemName: banner.kind == .success ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(banner.kind == .success ? Palette.strong : Palette.warning)
             Text(banner.text)
-                .font(.system(size: 11.5).weight(.bold))
+                .font(.brand(size: 11))
+                .foregroundStyle(Palette.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(4)
             Spacer(minLength: 0)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .help("Zamknij komunikat")
+            .accessibilityLabel("Zamknij komunikat")
         }
-        .foregroundStyle(banner.kind == .success ? Palette.strong : Palette.danger)
-        .padding(.horizontal, 10)
-        .frame(height: 36)
-        .background(banner.kind == .success ? Palette.soft : Palette.danger.opacity(0.12))
+        .padding(12)
+        .background(PulseTheme.selected.foundation, in: RoundedRectangle(cornerRadius: 12))
+        .overlay { RoundedRectangle(cornerRadius: 12).stroke(Palette.line) }
+        .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
     }
 }
 
 private struct ActionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 11, weight: .semibold))
+            .font(.brand(size: 11, weight: .semibold))
             .foregroundStyle(Palette.ink)
             .padding(.horizontal, 10)
             .frame(height: 28)
@@ -6787,7 +7239,7 @@ private struct WeatherSourceButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 9.5, weight: .semibold))
+            .font(.brand(size: 9.5, weight: .semibold))
             .foregroundStyle(active ? Palette.strong : Palette.muted)
             .padding(.horizontal, 7)
             .frame(height: 25)
@@ -6803,7 +7255,7 @@ private final class RateStatusView: NSView {
     private static let minimumFontSize: CGFloat = 8.1
     private static let statusFont = NSFont.monospacedDigitSystemFont(ofSize: statusFontSize, weight: .semibold)
     static let statusWidth: CGFloat = ceil(
-        ("999 MB/s" as NSString).size(withAttributes: [.font: statusFont]).width + 2
+        ("999 MB/s" as NSString).size(withAttributes: [.font: statusFont]).width + 3
     )
 
     var upload = "0 KB/s" {
@@ -7133,6 +7585,127 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+
+private extension PulseModel {
+    static func snapshotFixture(_ screen: String) -> PulseModel {
+        let model = PulseModel()
+        let now = Date()
+        let downloads: [Double] = (0..<30).map { (index: Int) -> Double in
+            let wave = sin(Double(index) * 0.42) * 3_000_000.0
+            let variation = Double((index * 17) % 5) * 300_000.0
+            return 7_000_000.0 + wave + variation
+        }
+        let uploads: [Double] = (0..<30).map { (index: Int) -> Double in 700_000.0 + sin(Double(index) * 0.35) * 400_000.0 }
+        model.network = NetworkState(
+            interfaceName: "en0", monitoredInterfaces: ["en0"], displayName: "Wi-Fi", address: "192.0.2.10",
+            upload: 2_310_000, download: 16_920_000, instantUpload: 2_310_000, instantDownload: 16_920_000,
+            uploadHistory: uploads, downloadHistory: downloads, isConnected: true
+        )
+        model.wifi = WiFiState(connection: .connected, interfaceName: "en0", networkName: "Studio", rssi: -48)
+        let names = ["Xcode", "Safari", "WindowServer", "Szlauch", "node", "Finder", "Mail", "Terminal"]
+        let processes = names.enumerated().map { index, name in
+            ProcessUsage(id: name, name: name, cpu: Double(62 - index * 8), memoryBytes: UInt64(8 - index) * 450_000_000)
+        }
+        model.system = SystemState(
+            cpuUsage: 0.31, memoryUsed: 20_000_000_000, memoryTotal: 34_359_738_368,
+            coreUsages: [0.52, 0.66, 0.44, 0.71, 0.11, 0.08, 0.19, 0.32, 0.08, 0.05, 0.11, 0.09],
+            cpuProcesses: processes, memoryProcesses: processes
+        )
+        var buckets: [TrafficBucket] = []
+        for index in 0..<7 {
+            var bucket = TrafficBucket(minute: Calendar.current.startOfDay(for: now).addingTimeInterval(Double(-index) * 86400))
+            bucket.add(download: UInt64(720_000_000 + index * 320_000_000), upload: UInt64(45_000_000 + index * 8_000_000), route: .hotspot)
+            if index == 0 { bucket.add(download: 5_300_000_000, upload: 450_000_000, route: .wifi) }
+            buckets.append(bucket)
+        }
+        var recent = TrafficBucket(minute: Calendar.current.dateInterval(of: .minute, for: now)!.start)
+        recent.add(download: 684_000_000, upload: 68_400_000, route: .wifi)
+        buckets.append(recent)
+        model.trafficHistory = TrafficHistoryState(buckets: buckets)
+        model.trafficRateHistory = TrafficRateHistoryState(samples: (0..<180).map { index in
+            TrafficRateSample(timestamp: now.addingTimeInterval(Double(index - 179) * 5),
+                              download: downloads[index % downloads.count], upload: uploads[index % uploads.count])
+        })
+        model.connectionCost = .standard
+        model.sleep = SleepState(mode: .disabled, configured: true)
+        model.vpn = VPNState(mode: .connected, serviceID: nil, serviceName: "Studio")
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        let firstHour = Calendar.current.dateInterval(of: .hour, for: now)!.end
+        let hours = (0..<24).map { index in
+            let date = firstHour.addingTimeInterval(Double(index) * 3600)
+            return ForecastHour(
+                time: formatter.string(from: date), date: date, temperature: Double(18 + index % 5),
+                precipitationProbability: index < 4 ? 70 : 15, precipitation: index < 4 ? 0.8 : 0,
+                windSpeed: 18, windGusts: 36, weatherCode: index < 4 ? 61 : 2
+            )
+        }
+        model.weather = WeatherState(
+            mode: .ready, place: WeatherPlace(name: "Warszawa", latitude: 52.23, longitude: 21.01, usesDeviceLocation: false),
+            temperature: 21, apparentTemperature: 18, weatherCode: 61, windSpeed: 18, windGusts: 36,
+            precipitation: 0.3, hours: hours, outlook: WeatherService.outlook(for: hours, source: .openMeteo), source: .openMeteo
+        )
+        model.weather.fetchedAt = now
+        model.airQuality = AirQualitySnapshot(europeanAQI: 31, pm25: 8.7, pm10: 12, uvIndex: 2)
+        model.trafficDetailsShown = screen == "traffic"
+        model.systemDetailsShown = screen == "processes" || screen == "memory"
+        model.processSort = screen == "memory" ? .memory : .cpu
+        model.weatherDetailsShown = screen.hasPrefix("weather")
+        model.hotspotDetailsShown = screen == "hotspot"
+        model.wifiDetailsShown = screen == "wifi"
+        model.personalHotspotName = "Mój iPhone"
+        if screen == "weather-loading" {
+            model.weather = .loading(source: .openMeteo)
+            model.airQuality = nil
+        }
+        return model
+    }
+}
+
+@MainActor
+private func renderPanelSnapshots(to directory: String) throws {
+    NSApplication.shared.setActivationPolicy(.prohibited)
+    let destination = URL(fileURLWithPath: directory, isDirectory: true)
+    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    for screen in ["dashboard", "traffic", "processes", "memory", "weather", "hotspot", "wifi", "weather-loading"] {
+        let renderer = ImageRenderer(content: SzlauchPanel(model: .snapshotFixture(screen)))
+        renderer.scale = 2
+        guard let cgImage = renderer.cgImage,
+              let png = NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:]) else {
+            throw NSError(domain: "SzlauchSnapshot", code: 1)
+        }
+        try png.write(to: destination.appendingPathComponent("\(screen).png"))
+        print("\(screen): \(cgImage.width)x\(cgImage.height), fixture data, opaque QA surface")
+    }
+}
+
+BrandFonts.register()
+
+if let index = CommandLine.arguments.firstIndex(of: "--snapshot") {
+    guard CommandLine.arguments.indices.contains(index + 1) else { exit(2) }
+    do {
+        try MainActor.assumeIsolated { try renderPanelSnapshots(to: CommandLine.arguments[index + 1]) }
+        exit(0)
+    } catch {
+        print("Snapshot failed: \(error)")
+        exit(1)
+    }
+}
+
+if CommandLine.arguments.contains("--self-test-fonts") {
+    let failures = BrandFonts.selfTestFailures(requireBundled: CommandLine.arguments.contains("--require-brand-fonts"))
+    failures.forEach { print($0) }
+    print(failures.isEmpty ? "Font tests passed" : "Font tests failed")
+    exit(failures.isEmpty ? 0 : 1)
+}
+
+if CommandLine.arguments.contains("--self-test-command-runner") {
+    let failures = CommandRunner.selfTestFailures()
+    failures.forEach { print($0) }
+    print(failures.isEmpty ? "Command runner tests passed" : "Command runner tests failed")
+    exit(failures.isEmpty ? 0 : 1)
+}
+
 if CommandLine.arguments.contains("--self-test-vpn") {
     let failures = VPNService.selfTestFailures()
     if failures.isEmpty {
@@ -7194,7 +7767,7 @@ if CommandLine.arguments.contains("--self-test-personal-hotspot") {
 }
 
 if CommandLine.arguments.contains("--self-test-wifi-selection") {
-    let failures = WiFiIdentity.selfTestFailures() + WiFiSettingsDestination.selfTestFailures()
+    let failures = WiFiIdentity.selfTestFailures() + WiFiSettingsDestination.selfTestFailures() + WiFiProbe.selfTestFailures()
     if failures.isEmpty {
         print("Wi-Fi selection self-test: OK (aktywna sieć, nazwy SSID i panel ustawień)")
         exit(EXIT_SUCCESS)
@@ -7214,7 +7787,7 @@ if CommandLine.arguments.contains("--self-test-navigation") {
 }
 
 if CommandLine.arguments.contains("--self-test-weather") {
-    let failures = AirQualitySnapshot.selfTestFailures()
+    let failures = AirQualitySnapshot.selfTestFailures() + WeatherService.selfTestFailures()
     if failures.isEmpty {
         print("Weather self-test: OK (jakość powietrza i format PM2.5)")
         exit(EXIT_SUCCESS)
@@ -7241,6 +7814,18 @@ if CommandLine.arguments.contains("--self-test-theme") {
     }
     failures.forEach { FileHandle.standardError.write(Data("Theme self-test: \($0)\n".utf8)) }
     exit(EXIT_FAILURE)
+}
+
+if CommandLine.arguments.contains("--self-test-regression") {
+    let failures = RegressionTests.failures()
+    failures.forEach { print($0) }
+    print(failures.isEmpty ? "Regression tests passed" : "Regression tests failed")
+    exit(failures.isEmpty ? 0 : 1)
+}
+
+if CommandLine.arguments.contains(where: { $0.hasPrefix("--self-test-") }) {
+    print("Unknown self-test")
+    exit(2)
 }
 
 let application = NSApplication.shared

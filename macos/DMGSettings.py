@@ -11,7 +11,7 @@ icon = icon_path
 hide = [".background"]
 
 # Finder writes the final background reference natively after this image is mounted.
-window_rect = ((120, 120), (720, 525))
+window_rect = ((120, 120), (720, 458))
 default_view = "icon-view"
 show_toolbar = False
 show_status_bar = False

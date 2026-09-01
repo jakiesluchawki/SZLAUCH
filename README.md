@@ -18,7 +18,7 @@ Aktualizacja z wcześniejszego prototypu `Pulse Bar` jednorazowo przenosi lokaln
 ## Funkcje
 
 - Dwie linie transferu w menu barze jak w iStat: upload u góry, download pod spodem, z ostatniej pełnej 1-sekundowej próbki; jednostka nie przeskakuje przy zmianie ruchu.
-- Natywny wygląd macOS 26 z Liquid Glass, dynamicznym kolorem akcentu i systemową typografią.
+- Natywny wygląd macOS 26 z Liquid Glass, dynamicznym kolorem akcentu oraz typografią Romie/Roobert (z systemowym fallbackiem).
 - Ciemny kontrast panelu pozostaje czytelny także przy jasnym trybie macOS;
   pierwsze uruchomienie zaczyna od 100% opacity, którą można później zmniejszyć
   pionowym gestem na nazwie `Szlauch`.
@@ -28,13 +28,13 @@ Aktualizacja z wcześniejszego prototypu `Pulse Bar` jednorazowo przenosi lokaln
 - Kliknięcie napisu `Szlauch` przełącza trzy dopracowane palety: nocną `Śliwkę` (domyślną), zielony `Mech` i morską `Zatokę`. Pobieranie pozostaje chłodne, a wysyłanie ciepłe w każdej palecie; przeciągnięcie w lewo lub prawo reguluje intensywność koloru, a w górę lub dół przezroczystość całego okna.
 - Odczyt sumy aktywnych fizycznych łączy Maca i lokalnego IPv4 bez zewnętrznych usług; panel oznacza ten odczyt jako `TRANSFER · CAŁY MAC` i pokazuje mierzony interfejs, więc Wi-Fi nie jest mylone ze źródłem wszystkich danych. VPN działający na routerze jest widoczny normalnie jako ruch Wi-Fi/Ethernet.
 - Panel pokazuje jawne źródło interfejsu, aktualny odczyt 1-sekundowy i spokojniejszą średnią z 5 sekund.
-- Subtelne wykresy ostatnich 30 sekund są rysowane w tle kafelków uploadu i downloadu.
+- Subtelne wykresy ostatnich 30 sekund są rysowane pod wartościami uploadu i downloadu, bez przecinania cyfr.
 - Kliknięcie kafelków transferu rozwija liniowy wykres z opisaną skalą i osią czasu: zakresy `15 MIN` i `1 H` zapisują rzeczywiste próbki co 5 sekund, a `DZIŚ` pokazuje czytelny trend co 15 minut, maksimum, średnią oraz lokalny bilans Wi-Fi i hotspotu. Kolejność pozostaje stała: `DOWNLOAD` po lewej, `UPLOAD` po prawej. Mikro-menu jednostki ustawia jedną stałą wartość dla panelu i paska: domyślnie `MB/s` (megabajty), a alternatywnie `Mb/s` (megabity, jak w ofertach łącza) lub `KB/s`.
 - Panel pokazuje rzeczywisty stan Wi-Fi, sygnalizuje słaby zasięg i pozwala wybrać sieć z przewijanej listy pobliskich SSID; aktywna sieć jest oznaczona i nie uruchamia ponownego łączenia ani formularza hasła. Przy zmianie sieci Szlauch najpierw korzysta z danych zapamiętanych przez macOS, a o hasło pyta dopiero wtedy, gdy system naprawdę go potrzebuje. Kliknięcie ikony Wi-Fi otwiera bezpośrednio zakładkę Wi-Fi w Ustawieniach systemowych.
 - W `SIECI` można raz ustawić osobisty hotspot telefonu i później przełączać się na niego jednym kliknięciem, bez ręcznego szukania go w Ustawieniach. Szlauch próbuje najpierw sieci zapamiętanej w macOS, a następnie wyszukuje wskazany SSID także jako ukryty.
 - Przy pierwszym wejściu w `SIECI` aplikacja sama wywołuje systemową zgodę wymaganą przez macOS do odczytu nazw sieci, a gdy zgoda wymaga ręcznej zmiany, prowadzi bezpośrednio do `Usług lokalizacji`.
-- Kompaktowe użycie CPU i pamięci RAM; kliknięcie rozwija smukły wykres rdzeni z maksimum oraz osiem aplikacji zużywających najwięcej CPU/RAM.
-- Widoki analityczne zachowują kontekst: szczegóły CPU/RAM pokazują na górze bieżący transfer z wejściem do wykresu, a szczegóły transferu pokazują skrót CPU/RAM z wejściem do listy procesów.
+- Kompaktowe użycie CPU i pamięci RAM; kliknięcie rozwija smukły wykres rdzeni z maksimum oraz osiem procesów zużywających najwięcej CPU/RAM w czytelnej tabeli z zakładkami `Procesor` i `Pamięć`.
+- Widoki analityczne zachowują kontekst: szczegóły CPU/RAM pokazują pod listą bieżący transfer z wejściem do wykresu, a szczegóły transferu pokazują skrót CPU/RAM z wejściem do listy procesów.
 - Z widoku sieci, wykresu, procesów i historii hotspotu można wrócić klikając pasywne tło panelu albo jawne `WRÓĆ`; przyciski nadal wykonują swoje akcje. Pogoda pozostaje wyjątkiem: `WIĘCEJ` rozwija prognozę, a temperatura i ikona pogody otwierają aplikację Pogoda.
 - Pogoda w panelu: domyślnie dla lokalizacji Maca, z możliwością wyszukania innej miejscowości; pasek pozostaje oszczędny i pokazuje transfer.
 - Zwarte rozwinięcie `WIĘCEJ` z czterema kafelkami w skali `4 H`, `12 H` lub `24 H` (co 1, 3 lub 6 godzin), zmianą miejscowości i przejściem do aplikacji Pogoda.
@@ -114,3 +114,32 @@ Prognoza domyślnie pochodzi z automatycznego modelu Open-Meteo. W rozwinięciu 
 Sterowanie VPN wymaga zainstalowanego WireGuard i co najmniej jednego tunelu. Szlauch steruje usługą VPN WireGuard zarejestrowaną w macOS, a nie samym oknem aplikacji WireGuard. Na każdym Macu zapamiętuje osobno ostatnio aktywny tunel. Jeśli na komputerze jest kilka tuneli i żaden nie był wcześniej wybrany przez Szlauch, wystarczy raz połączyć właściwy tunel w WireGuard; aplikacja go zapamięta i od tej chwili pozwoli nim sterować z paska, także po zamknięciu aplikacji WireGuard.
 
 Przy pierwszym użyciu `Nie usypiaj` Szlauch prosi macOS o jednorazową zgodę administratora. Tworzy ona ograniczoną regułę tylko dla dwóch poleceń przełączających systemową blokadę uśpienia; aplikacja nie otrzymuje i nie zapisuje hasła. Anulowanie systemowego okna nie jest błędem i nie pozostawia komunikatu w panelu. Zgodę można wycofać z menu `...` przy przełączniku `Nie usypiaj`; macOS poprosi wtedy o autoryzację do usunięcia reguły.
+
+## Typografia i testy 0.4
+
+Interfejs używa Romie i Roobert. Licencjonowane pliki OTF nie są dołączane do
+publicznego repozytorium. Właściciel licencji może umieścić
+`Romie-Regular.otf`, `Roobert-Regular.otf` i `Roobert-Bold.otf` w
+`.local/brand-fonts/` albo wskazać katalog przez `SZLAUCH_FONT_DIR`.
+Fonty rejestrują się tylko w procesie aplikacji, bez instalacji w systemie.
+Build bez tych plików używa systemowych fontów macOS.
+
+```bash
+SZLAUCH_REQUIRE_BRAND_FONTS=1 ./scripts/build-macos-app.sh
+zsh scripts/test-self.sh
+./Szlauch.app/Contents/MacOS/Szlauch --snapshot .local/screens
+```
+
+Build wydawniczy jest optymalizowany (`-O`). Do szybkiej lokalnej kontroli
+można ustawić `SZLAUCH_OPTIMIZATION=-Onone`.
+Jeśli certyfikat i profil notaryzacji są w osobnym pęku kluczy, ustaw
+`SZLAUCH_SIGN_KEYCHAIN`; pęk musi być odblokowany w macOS.
+
+```bash
+SZLAUCH_REQUIRE_BRAND_FONTS=1 SZLAUCH_REQUIRE_NOTARIZATION=1 ./scripts/test-release.sh
+```
+
+Reset hotspotu zeruje tylko prezentowane statystyki hotspotu, bez kasowania
+historycznych sum transferu Maca. Jednostki sieciowe są dziesiętne:
+1 MB/s = 1 000 000 B/s = 8 Mb/s. Pamięć procesów to suma RSS, a 100% w rankingu
+CPU oznacza jeden rdzeń, nie cały procesor.

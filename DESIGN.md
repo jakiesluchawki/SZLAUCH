@@ -5,7 +5,7 @@
 - The default popover is one compact instrument surface: header, weather,
   transfer, system/hotspot history and local controls.
 - Hairline separators and spacing establish hierarchy in the default surface;
-  expanded tasks may use separate glass surfaces where density requires it.
+  details share the same outer glass surface, without a stack of outlined cards.
 - Main navigation actions (`WIĘCEJ`, `SIECI`, `7 DNI`, `WRÓĆ`) are inline
   labels with chevrons, not capsule buttons.
 - Expansion replaces supporting content in the same panel; the return action
@@ -41,12 +41,17 @@
 
 ## Type And Contrast
 
-- System font and monospaced digits for changing measurements.
-- Compact supporting labels should remain at least 8.5 pt.
+- Bundle the licensed Roobert Regular/Bold for UI and measurements; reserve
+  Romie Regular for the wordmark and short detail headings. Keep tabular digits.
+- Font binaries are ignored local build inputs, not public source assets.
+  System sans/serif fallback is intentional for source builds without fonts.
+- Compact supporting labels remain at least 9.5 pt; technical monospaced axis
+  labels may use 9 pt. Main readouts separate a large value from its quiet unit.
 - The instrument panel always uses its authored dark appearance, even when
   macOS is in Light Mode; system appearance must never turn labels black on
   the dark Zgrywa palettes.
-- Text and glyphs use system foreground colors; data traces use a sufficiently
+- Text uses warm off-white ink and muted supporting colors; weather glyphs retain
+  a contrasting native foreground. Data traces use a sufficiently
   visible stroke even while the panel tint is personalised.
 - Window opacity has a readability floor of 62 percent.
 
@@ -65,7 +70,7 @@
 ## Motion And Control
 
 - View transitions use a calm 220 ms eased dissolve without shifting the
-  complete surface vertically. The popover remains a fixed 360 x 420 pt
+  complete surface vertically. The popover remains a fixed 384 x 472 pt
   surface in every state, so opening details cannot move its frame or arrow.
 - Selection changes inside a detail view use a shorter 160 ms ease-out
   response rather than reading as navigation.
@@ -85,3 +90,25 @@
   at 100 percent window opacity. Later user adjustments remain persistent.
 - System authorization is requested only at the point of action, with plain
   language before the sleep permission dialog and a visible removal command.
+
+## Detail Density
+
+- Transfer gives the linear chart 132 pt, five Y levels and stable units.
+  Sparklines stay below values and never cross the typography.
+- System uses a full-width ranking with Processor/Memory tabs, explicit entry
+  from each dashboard metric, eight processes and thin per-core meters.
+- Hotspot has a dedicated seven-day table, without repeated Wi-Fi/CPU cards.
+  Reset starts a separate hotspot display baseline, never deletes whole-Mac data.
+- Unknown rainfall/AQI stays unknown. Stale forecasts are identified, and
+  rain intervals retain each provider's preceding/next-hour semantics.
+- Readouts update without rolling-number animations. Reduce Motion disables
+  navigation animation; Reduce Transparency uses an opaque panel surface.
+- Errors are dismissible overlays and cannot change the panel's route or size.
+
+## Visual Verification
+
+`--snapshot <directory>` renders fixture-based layouts without polling, saving
+measurements or changing connections. The portable renderer uses an opaque
+surface and state icons/text for AppKit controls it cannot rasterize.
+These are layout/type previews, not a substitute for testing native glass,
+menus, toggles, scrolling and popover positioning in the application.

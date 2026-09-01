@@ -12,17 +12,7 @@ test -f "$DMG_PATH"
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 lipo "$APP_PATH/Contents/MacOS/Szlauch" -verify_arch arm64 x86_64
-"$APP_PATH/Contents/MacOS/Szlauch" --self-test-vpn
-"$APP_PATH/Contents/MacOS/Szlauch" --self-test-sleep
-"$APP_PATH/Contents/MacOS/Szlauch" --self-test-rate-format
-"$APP_PATH/Contents/MacOS/Szlauch" --self-test-network
-"$APP_PATH/Contents/MacOS/Szlauch" --self-test-hotspot-history
-"$APP_PATH/Contents/MacOS/Szlauch" --self-test-personal-hotspot
-"$APP_PATH/Contents/MacOS/Szlauch" --self-test-wifi-selection
-"$APP_PATH/Contents/MacOS/Szlauch" --self-test-navigation
-"$APP_PATH/Contents/MacOS/Szlauch" --self-test-weather
-"$APP_PATH/Contents/MacOS/Szlauch" --self-test-runtime
-"$APP_PATH/Contents/MacOS/Szlauch" --self-test-theme
+zsh "$PROJECT_DIR/scripts/test-self.sh" "$APP_PATH"
 
 mkdir -p "$MOUNT_POINT"
 cleanup() {
@@ -38,16 +28,17 @@ test -d "$MOUNT_POINT/Szlauch.app"
 test -L "$MOUNT_POINT/Applications"
 test -f "$MOUNT_POINT/.background/background.png"
 codesign --verify --deep --strict --verbose=2 "$MOUNT_POINT/Szlauch.app"
-"$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" --self-test-vpn
-"$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" --self-test-sleep
-"$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" --self-test-rate-format
-"$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" --self-test-network
-"$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" --self-test-hotspot-history
-"$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" --self-test-personal-hotspot
-"$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" --self-test-wifi-selection
-"$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" --self-test-navigation
-"$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" --self-test-weather
-"$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" --self-test-runtime
-"$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" --self-test-theme
+lipo "$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" -verify_arch arm64 x86_64
+MOUNTED_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$MOUNT_POINT/Szlauch.app/Contents/Info.plist")"
+[[ "$MOUNTED_VERSION" == "$APP_VERSION" ]]
+cmp "$APP_PATH/Contents/MacOS/Szlauch" "$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch"
+test -f "$MOUNT_POINT/.DS_Store"
+zsh "$PROJECT_DIR/scripts/test-self.sh" "$MOUNT_POINT/Szlauch.app"
+
+if [[ "${SZLAUCH_REQUIRE_NOTARIZATION:-0}" == "1" ]]; then
+  xcrun stapler validate "$DMG_PATH"
+  spctl --assess --type execute --verbose=4 "$MOUNT_POINT/Szlauch.app"
+  spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"
+fi
 
 echo "Release test: OK ($APP_VERSION, universal app, DMG layout, VPN, sleep, aggregate network, Wi-Fi selection, personal hotspot, navigation, weather details, hotspot history, palettes, read-only preview and rate units)"

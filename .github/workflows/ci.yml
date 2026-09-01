@@ -21,19 +21,7 @@ jobs:
         run: ./scripts/build-macos-app.sh
 
       - name: Run self-tests
-        run: |
-          app="Szlauch.app/Contents/MacOS/Szlauch"
-          "$app" --self-test-vpn
-          "$app" --self-test-sleep
-          "$app" --self-test-rate-format
-          "$app" --self-test-network
-          "$app" --self-test-hotspot-history
-          "$app" --self-test-personal-hotspot
-          "$app" --self-test-wifi-selection
-          "$app" --self-test-navigation
-          "$app" --self-test-weather
-          "$app" --self-test-runtime
-          "$app" --self-test-theme
+        run: zsh scripts/test-self.sh
 
   secret-scan:
     runs-on: ubuntu-latest

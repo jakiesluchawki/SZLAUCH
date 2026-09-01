@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 
 private extension NSColor {
     convenience init(hex: UInt, alpha: CGFloat = 1) {
@@ -42,9 +43,17 @@ private func drawPulseMark(at origin: NSPoint, color: NSColor) {
     mark.stroke()
 }
 
-guard CommandLine.arguments.count == 2 else {
+guard CommandLine.arguments.count >= 2 else {
     fputs("Usage: dmg-background <output.png>\n", stderr)
     exit(1)
+}
+
+if CommandLine.arguments.count > 2 {
+    let directory = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+    for name in ["Romie-Regular", "Roobert-Regular", "Roobert-Bold"] {
+        let url = directory.appendingPathComponent(name + ".otf")
+        CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+    }
 }
 
 let outputPath = CommandLine.arguments[1]
@@ -89,13 +98,13 @@ drawPulseMark(at: NSPoint(x: 43, y: 357), color: strong)
 drawText(
     "Szlauch",
     at: NSPoint(x: 94, y: 350),
-    font: .systemFont(ofSize: 30, weight: .semibold),
+    font: NSFont(name: "Romie-Regular", size: 36) ?? .systemFont(ofSize: 30, weight: .semibold),
     color: ink
 )
 drawText(
     "Przeciągnij aplikację do folderu Applications.",
     at: NSPoint(x: 43, y: 304),
-    font: .systemFont(ofSize: 13.5, weight: .medium),
+    font: NSFont(name: "Roobert-Regular", size: 14) ?? .systemFont(ofSize: 13.5, weight: .medium),
     color: strong
 )
 

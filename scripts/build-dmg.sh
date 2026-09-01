@@ -9,6 +9,7 @@ APP_PATH="$PROJECT_DIR/Szlauch.app"
 VOLUME_NAME="Szlauch"
 SIGN_IDENTITY="${SZLAUCH_SIGN_IDENTITY:--}"
 NOTARY_PROFILE="${SZLAUCH_NOTARY_PROFILE:-}"
+SIGN_KEYCHAIN="${SZLAUCH_SIGN_KEYCHAIN:-}"
 
 export SZLAUCH_SIGN_IDENTITY="$SIGN_IDENTITY"
 "$PROJECT_DIR/scripts/build-macos-app.sh"
@@ -27,8 +28,8 @@ rm -f "$FINAL_DMG"
 
 xcrun swiftc "$PROJECT_DIR/macos/DMGBackgroundGenerator.swift" \
   -o "$BUILD_DIR/dmg-background" \
-  -framework AppKit
-"$BUILD_DIR/dmg-background" "$BACKGROUND_PATH"
+  -framework AppKit -framework CoreText
+"$BUILD_DIR/dmg-background" "$BACKGROUND_PATH" "$APP_PATH/Contents/Resources/Fonts"
 mkdir -p "$BACKGROUND_DIR"
 ditto "$BACKGROUND_PATH" "$BACKGROUND_DIR/background.png"
 
@@ -82,7 +83,7 @@ tell application "Finder"
     set current view of w to icon view
     set toolbar visible of w to false
     set statusbar visible of w to false
-    set bounds of w to {120, 120, 840, 645}
+    set bounds of w to {120, 120, 840, 578}
     set v to icon view options of w
     set icon size of v to 96
     set text size of v to 12
@@ -106,9 +107,13 @@ hdiutil convert "$LAYOUT_DMG" -format UDZO -imagekey zlib-level=9 -o "$FINAL_DMG
 hdiutil verify "$FINAL_DMG" >/dev/null
 
 if [[ "$SIGN_IDENTITY" != "-" ]]; then
-  codesign --force --timestamp --sign "$SIGN_IDENTITY" "$FINAL_DMG"
+  SIGN_ARGS=(--force --timestamp --sign "$SIGN_IDENTITY")
+  if [[ -n "$SIGN_KEYCHAIN" ]]; then SIGN_ARGS+=(--keychain "$SIGN_KEYCHAIN"); fi
+  codesign "${SIGN_ARGS[@]}" "$FINAL_DMG"
   if [[ -n "$NOTARY_PROFILE" ]]; then
-    xcrun notarytool submit "$FINAL_DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+    NOTARY_ARGS=(--keychain-profile "$NOTARY_PROFILE")
+    if [[ -n "$SIGN_KEYCHAIN" ]]; then NOTARY_ARGS+=(--keychain "$SIGN_KEYCHAIN"); fi
+    xcrun notarytool submit "$FINAL_DMG" "${NOTARY_ARGS[@]}" --wait
     xcrun stapler staple "$FINAL_DMG"
     xcrun stapler validate "$FINAL_DMG"
   else

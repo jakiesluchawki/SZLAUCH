@@ -14,6 +14,10 @@ history:
   - date: "2026-09-01"
     status: completed
     who: mieszko
+    note: "Closed CI follow-up: verified the public SPKI fingerprint against the supplied DER certificate and allowed only that exact value. Full 11-commit history scan is clean; a synthetic API-key control is still detected. No app or DMG changes."
+  - date: "2026-09-01"
+    status: completed
+    who: mieszko
     note: "Published signed/notarized 0.4.0 as Latest. All 14 unchanged suites passed locally, from the final DMG and from its public download. Installed on the host with settings/history preserved. No app-source changes; native/physical-machine coverage deferred to backlog 0003."
   - date: "2026-09-01"
     status: active
@@ -88,6 +92,8 @@ or configuration were changed.
   (deferred to 0003; no Rosetta runtime and no disruptive host changes).
 - [x] Only the verified DMG is public; GitHub marks 0.4.0 as Latest.
 - [x] Public download matches the final SHA-256 and passes release checks.
+- [x] Secret scanning passes with only the verified public certificate digest
+  excepted; a synthetic credential control still triggers the detector.
 
 ## Implementation Notes
 
@@ -113,6 +119,10 @@ or configuration were changed.
 
 ## Issues Encountered
 
+- GitHub's generic API-key detector mistook the documented public SPKI digest
+  for a credential. Recomputed it from the supplied DER certificate and added
+  only that exact public value to the existing allowlist. Full-history and
+  positive-control scans confirmed other credential detection remains active.
 - The legacy identity in `login_renamed_1.keychain-db` could not sign:
   `errSecInternalComponent`. It was preserved, not revoked or unlocked.
 - Xcode cloud Developer ID export using the approved API key failed with

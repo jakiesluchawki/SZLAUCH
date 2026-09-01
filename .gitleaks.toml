@@ -4,7 +4,7 @@ title = "SZLAUCH secret scanning"
 useDefault = true
 
 [allowlist]
-description = "Synthetic identifiers used by parser self-tests"
+description = "Synthetic test identifiers and a verified public certificate fingerprint"
 regexTarget = "match"
 regexes = [
   '''appearance-v2\.intensity''',
@@ -12,5 +12,7 @@ regexes = [
   '''AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB''',
   '''CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD''',
   '''EEEEEEEE-7777-8888-9999-FFFFFFFFFFFF''',
-  '''11111111-1111-1111-1111-111111111111'''
+  '''11111111-1111-1111-1111-111111111111''',
+  # Public Developer ID certificate SPKI digest, not an API credential.
+  '''\b48f16281481e19d90d027375132c90e26d1b6ec8a09c008d2a79108fd7f5abf7\b'''
 ]

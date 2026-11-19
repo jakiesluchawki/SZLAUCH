@@ -5,6 +5,9 @@
 - The dashboard starts with the Mac's local date and weather. Wi-Fi,
   whole-Mac transfer and daily hotspot totals sit together above CPU and RAM.
   Local controls occupy the bottom row.
+- The date uses Romie at display size with the weekday above it. Temperature,
+  city and the forecast action share the adjacent column. Download and upload
+  each have a tinted plot surface with Polish labels and aligned baselines.
 - Hairline separators and spacing establish hierarchy in the default surface;
   details share the same outer glass surface, without a stack of outlined cards.
 - Main navigation actions (`PROGNOZA`, `SIECI`, `7 DNI`, `WRÓĆ`) are inline

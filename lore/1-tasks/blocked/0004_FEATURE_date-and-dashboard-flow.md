@@ -27,6 +27,10 @@ header now shows the local Polish weekday and date even while loading. Forecast
 and conditions precede location controls. Hotspot totals follow network rates.
 Native preview checks exercised the forecast and hotspot round trips.
 
+The second design pass gives the calendar and weather separate columns,
+uses the display face for the date, and condenses daily hotspot totals into
+one line. The transfer readouts use Polish labels and lightly tinted plots.
+
 All 14 suites passed in the optimized universal app and from the mounted DMG.
 The native background bookmark resolved inside the remounted image. Both code
 signatures verify. Intel runtime and live VPN/sleep changes were not exercised.

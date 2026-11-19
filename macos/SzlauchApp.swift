@@ -4834,15 +4834,16 @@ private struct SzlauchPanel: View {
                 .foregroundStyle(Palette.ink)
                 .contentShape(Rectangle())
                 .gesture(appearanceGesture)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Paleta Szlaucha")
                 .help("Paleta: \(theme.variant.label). Kliknij: następna paleta. Przeciągnij: lewo/prawo kolor, góra/dół przezroczystość.")
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction {
                     cycleTheme()
                 }
             Spacer()
-            Text("ODCZYT CO 1 S")
-                .font(.brand(size: 9, weight: .semibold))
-                .tracking(0.6)
+            Text("Odczyt co 1 s")
+                .font(.brand(size: 10, weight: .medium))
                 .foregroundStyle(Palette.muted)
             Menu {
                 Toggle(
@@ -5263,47 +5264,51 @@ private struct WeatherSummary: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 9) {
-                Button(action: model.openWeatherApp) {
-                    HStack(spacing: 7) {
-                        WeatherGlyph(code: model.weather.weatherCode, size: model.weatherDetailsShown ? 24 : 18, isDay: model.weather.isDay)
-                        Text(WeatherDisplay.temperature(model.weather.temperature))
-                            .font(.brand(size: model.weatherDetailsShown ? 32 : 24, weight: .bold))
-                            .monospacedDigit()
-                            .foregroundStyle(Palette.ink)
-                    }
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 7)
-                .frame(height: model.weatherDetailsShown ? 48 : 40)
-                .help("Otwórz aplikację Pogoda")
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(Date.now.formatted(.dateTime.locale(Locale(identifier: "pl_PL"))
-                        .weekday(.wide).day().month(.wide)))
-                        .font(.brand(size: 11.5, weight: .bold))
-                        .foregroundStyle(Palette.strong)
-                        .lineLimit(1)
-                    Text(summaryDescription)
+            HStack(alignment: .center, spacing: 12) {
+                let today = Date.now
+                let polish = Date.FormatStyle.dateTime.locale(Locale(identifier: "pl_PL"))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(today.formatted(polish.weekday(.wide)).capitalized)
                         .font(.brand(size: 12, weight: .semibold))
+                        .foregroundStyle(Palette.strong)
+                    Text(today.formatted(polish.day().month(.wide)))
+                        .font(BrandFonts.heading(29))
                         .foregroundStyle(Palette.ink)
-                    Text(model.weather.place?.name ?? model.weather.outlook)
-                        .font(.brand(size: 9.5))
-                        .foregroundStyle(Palette.muted)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
-                Spacer(minLength: 0)
-                Button {
-                    withAnimation(PanelMotion.navigation) {
-                        model.toggleWeatherDetails()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(today.formatted(polish.weekday(.wide).day().month(.wide)))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Button(action: model.openWeatherApp) {
+                        HStack(spacing: 5) {
+                            WeatherGlyph(code: model.weather.weatherCode, size: 19, isDay: model.weather.isDay)
+                            Text(WeatherDisplay.temperature(model.weather.temperature))
+                                .font(.brand(size: 22, weight: .bold)).monospacedDigit()
+                            if let place = model.weather.place {
+                                Text(place.name).font(.brand(size: 10)).foregroundStyle(Palette.muted)
+                                    .lineLimit(1).truncationMode(.tail)
+                            }
+                        }
                     }
-                } label: {
-                    InlineNavigationLabel(
-                        title: model.weatherDetailsShown ? "WRÓĆ" : "PROGNOZA",
-                        backwards: model.weatherDetailsShown
-                    )
+                    .foregroundStyle(Palette.ink)
+                    .buttonStyle(.plain)
+                    .help("Otwórz aplikację Pogoda")
+                    Text(model.weather.mode == .ready ? summaryDescription : model.weather.outlook)
+                        .font(.brand(size: 11, weight: .medium))
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(2)
+                    Button {
+                        withAnimation(PanelMotion.navigation) { model.toggleWeatherDetails() }
+                    } label: {
+                        InlineNavigationLabel(title: model.weatherDetailsShown ? "WRÓĆ" : "PROGNOZA",
+                                              backwards: model.weatherDetailsShown)
+                    }
+                    .buttonStyle(InlineActionButtonStyle())
                 }
-                .buttonStyle(InlineActionButtonStyle())
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if model.weatherDetailsShown {
@@ -5316,8 +5321,13 @@ private struct WeatherSummary: View {
                     .transition(PanelMotion.surfaceTransition)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(alignment: .topLeading) {
+            LinearGradient(colors: [Palette.strong.opacity(0.10), .clear],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+                .allowsHitTesting(false)
+        }
     }
 
     private var summaryDescription: String {
@@ -5683,7 +5693,7 @@ private struct CompactTransferHero: View {
     var body: some View {
         HStack(spacing: 10) {
             CompactHeroRate(
-                label: "DOWNLOAD",
+                label: "Pobieranie",
                 symbol: "arrow.down",
                 value: downloadValue,
                 samples: downloadSamples,
@@ -5691,12 +5701,8 @@ private struct CompactTransferHero: View {
                 prominent: true
             )
 
-            Rectangle()
-                .fill(Palette.line.opacity(0.72))
-                .frame(width: 1, height: 54)
-
             CompactHeroRate(
-                label: "UPLOAD",
+                label: "Wysyłanie",
                 symbol: "arrow.up",
                 value: uploadValue,
                 samples: uploadSamples,
@@ -5723,16 +5729,21 @@ private struct CompactHeroRate: View {
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(color)
                 Text(label)
-                    .font(.brand(size: 9.5, weight: .semibold))
-                    .tracking(0.8)
-                    .foregroundStyle(Palette.muted)
+                    .font(.brand(size: 11, weight: .semibold))
+                    .foregroundStyle(Palette.ink)
             }
-            MeasurementValue(value: value, color: color, size: prominent ? 27 : 24)
+            MeasurementValue(value: value, color: color, size: prominent ? 27 : 25)
             RateSparkline(samples: samples, color: color)
-                .frame(height: 24)
-                .padding(.top, 2)
+                .frame(height: 17)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            LinearGradient(colors: [color.opacity(0.11), color.opacity(0.035)],
+                           startPoint: .bottomLeading, endPoint: .topTrailing),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
     }
 }
 
@@ -6675,10 +6686,18 @@ private struct CompactHotspotRow: View {
                     Text("Hotspot")
                         .font(.brand(size: 11, weight: .semibold))
                         .foregroundStyle(Palette.ink)
-                    Text(connectionCost.isMetered ? "teraz" : "dzisiaj")
+                    Text(connectionCost.isMetered ? "aktywny · dziś" : "dziś")
                         .font(.brand(size: 10))
                         .foregroundStyle(Palette.muted)
                     Spacer()
+                    HStack(spacing: 7) {
+                        Text("↓ \(MetricFormatter.mobileData(today.download))").foregroundStyle(Palette.inbound)
+                        Text("↑ \(MetricFormatter.mobileData(today.upload))").foregroundStyle(Palette.outbound)
+                    }
+                    .font(.brand(size: 11, weight: .semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                     Button(action: onToggle) { InlineNavigationLabel(title: "7 DNI") }
                         .buttonStyle(InlineActionButtonStyle())
                 }
@@ -6713,23 +6732,6 @@ private struct CompactHotspotRow: View {
                     .buttonStyle(PanelButtonStyle())
                     .help("Wyzeruj dzienną historię hotspotu")
                 }
-            } else {
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    Text("↓ \(MetricFormatter.mobileData(today.download))")
-                        .font(.brand(size: 12).weight(.bold))
-                        .foregroundStyle(Palette.inbound)
-                    Text("pobrano")
-                        .font(.brand(size: 9))
-                        .foregroundStyle(Palette.muted)
-                    Spacer()
-                    Text("↑ \(MetricFormatter.mobileData(today.upload))")
-                        .font(.brand(size: 10).weight(.semibold))
-                        .foregroundStyle(Palette.outbound)
-                    Text("wysłano")
-                        .font(.brand(size: 9))
-                        .foregroundStyle(Palette.muted)
-                }
-                .monospacedDigit()
             }
         }
         .padding(.horizontal, 0)

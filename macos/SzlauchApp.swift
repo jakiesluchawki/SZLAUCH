@@ -3123,7 +3123,7 @@ private enum WeatherService {
         }
         var request = URLRequest(url: url)
         request.timeoutInterval = 8
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.4.0"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.5.0"
         request.setValue("Szlauch/\(version) (https://github.com/jakiesluchawki/SZLAUCH)", forHTTPHeaderField: "User-Agent")
         URLSession.shared.dataTask(with: request) { data, response, _ in
             guard let http = response as? HTTPURLResponse,
@@ -4753,8 +4753,11 @@ private struct SzlauchPanel: View {
             WeatherSummary(model: model)
             InstrumentDivider()
             compactDashboardNetworkSection
+            dashboardHotspot
             InstrumentDivider()
-            compactDashboardSystemSection
+            systemMetrics
+                .padding(.horizontal, 18)
+                .padding(.vertical, 8)
             Spacer(minLength: 6)
             InstrumentDivider()
             compactControlsContent
@@ -5132,19 +5135,16 @@ private struct SzlauchPanel: View {
         }
     }
 
-    private var compactDashboardSystemSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            systemMetrics
-            CompactHotspotRow(
-                history: model.trafficHistory,
-                connectionCost: model.connectionCost,
-                expanded: false,
-                onToggle: model.toggleHotspotDetails,
-                onReset: model.resetHotspotHistory
-            )
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+    private var dashboardHotspot: some View {
+        CompactHotspotRow(
+            history: model.trafficHistory,
+            connectionCost: model.connectionCost,
+            expanded: false,
+            onToggle: model.toggleHotspotDetails,
+            onReset: model.resetHotspotHistory
+        )
+        .padding(.horizontal, 14)
+        .padding(.bottom, 6)
     }
 
     private var compactTransferShortcut: some View {
@@ -5279,6 +5279,11 @@ private struct WeatherSummary: View {
                 .help("Otwórz aplikację Pogoda")
 
                 VStack(alignment: .leading, spacing: 2) {
+                    Text(Date.now.formatted(.dateTime.locale(Locale(identifier: "pl_PL"))
+                        .weekday(.wide).day().month(.wide)))
+                        .font(.brand(size: 11.5, weight: .bold))
+                        .foregroundStyle(Palette.strong)
+                        .lineLimit(1)
                     Text(summaryDescription)
                         .font(.brand(size: 12, weight: .semibold))
                         .foregroundStyle(Palette.ink)
@@ -5294,7 +5299,7 @@ private struct WeatherSummary: View {
                     }
                 } label: {
                     InlineNavigationLabel(
-                        title: model.weatherDetailsShown ? "WRÓĆ" : "WIĘCEJ",
+                        title: model.weatherDetailsShown ? "WRÓĆ" : "PROGNOZA",
                         backwards: model.weatherDetailsShown
                     )
                 }
@@ -5329,6 +5334,49 @@ private struct WeatherDetails: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
+            if !displayedHours.isEmpty {
+                HStack(alignment: .top, spacing: 7) {
+                    Text(outlookText)
+                        .font(.brand(size: 10))
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                    Picker("Zakres prognozy", selection: rangeSelection) {
+                        ForEach(ForecastRange.allCases) { item in
+                            Text(item.rawValue)
+                                .tag(item)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .frame(width: 66)
+                    .help("Zakres prognozy godzinowej")
+                    .snapshotFallback { Label(range.rawValue, systemImage: "chevron.down").font(.brand(size: 10)).foregroundStyle(Palette.muted) }
+                }
+
+                HStack(spacing: 5) {
+                    ForEach(displayedHours) { hour in
+                        WeatherHourTile(hour: hour)
+                    }
+                }
+                .frame(height: 78)
+            }
+
+            if model.weather.mode == .ready || model.airQuality != nil {
+                WeatherConditionsSection(
+                    weather: model.weather,
+                    hours: visibleHours,
+                    range: range,
+                    airQuality: model.airQuality,
+                    airQualityLoading: model.airQualityLoading
+                )
+            } else if model.weather.place != nil {
+                Text(model.weather.outlook)
+                    .font(.brand(size: 11))
+                    .foregroundStyle(Palette.ink)
+            }
+
             HStack(spacing: 6) {
                 ZStack(alignment: .leading) {
                     if query.isEmpty {
@@ -5338,6 +5386,7 @@ private struct WeatherDetails: View {
                             .padding(.leading, 8)
                     }
                     TextField("", text: $query)
+                        .accessibilityLabel("Inna miejscowość")
                         .textFieldStyle(.plain)
                         .font(.brand(size: 10.5))
                         .foregroundStyle(Palette.ink)
@@ -5362,41 +5411,6 @@ private struct WeatherDetails: View {
                 .buttonStyle(PanelButtonStyle())
                 .help("Moja lokalizacja")
             }
-
-            HStack(alignment: .top, spacing: 7) {
-                Text(outlookText)
-                    .font(.brand(size: 10))
-                    .foregroundStyle(Palette.ink)
-                    .lineLimit(2)
-                Spacer(minLength: 0)
-                Picker("Zakres prognozy", selection: rangeSelection) {
-                    ForEach(ForecastRange.allCases) { item in
-                        Text(item.rawValue)
-                            .tag(item)
-                    }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .controlSize(.small)
-                .frame(width: 66)
-                .help("Zakres prognozy godzinowej")
-                .snapshotFallback { Label(range.rawValue, systemImage: "chevron.down").font(.brand(size: 10)).foregroundStyle(Palette.muted) }
-            }
-
-            HStack(spacing: 5) {
-                ForEach(displayedHours) { hour in
-                    WeatherHourTile(hour: hour)
-                }
-            }
-            .frame(height: 78)
-
-            WeatherConditionsSection(
-                weather: model.weather,
-                hours: visibleHours,
-                range: range,
-                airQuality: model.airQuality,
-                airQualityLoading: model.airQualityLoading
-            )
 
             HStack(spacing: 8) {
                 WeatherSourceMenu(model: model)

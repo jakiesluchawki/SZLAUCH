@@ -20,7 +20,7 @@ BACKGROUND_PATH="$BUILD_DIR/background.png"
 BACKGROUND_DIR="$BUILD_DIR/.background"
 LAYOUT_DMG="$BUILD_DIR/Szlauch-layout.dmg"
 DMGBUILD_VENV="$TOOLS_DIR/dmgbuild"
-MOUNT_POINT="/Volumes/$VOLUME_NAME"
+MOUNT_POINT="$BUILD_DIR/mounted"
 
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR" "$TOOLS_DIR" "$DIST_DIR"
@@ -38,9 +38,6 @@ if [[ ! -x "$DMGBUILD_VENV/bin/dmgbuild" ]]; then
   "$DMGBUILD_VENV/bin/pip" -q install "dmgbuild==1.6.5"
 fi
 
-osascript -e "tell application \"Finder\" to try to close container window of disk \"$VOLUME_NAME\" end try" 2>/dev/null || true
-hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null || true
-
 "$DMGBUILD_VENV/bin/dmgbuild" \
   -s "$PROJECT_DIR/macos/DMGSettings.py" \
   -D app_path="$APP_PATH" \
@@ -52,51 +49,37 @@ hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null || true
 MOUNTED=0
 cleanup_layout_volume() {
   if [[ "$MOUNTED" == "1" ]]; then
-    osascript -e "tell application \"Finder\" to try to close container window of (POSIX file \"$MOUNT_POINT\" as alias) end try" 2>/dev/null || true
     hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null || true
     MOUNTED=0
   fi
 }
 trap cleanup_layout_volume EXIT
 
+mkdir -p "$MOUNT_POINT"
 hdiutil attach -nobrowse -readwrite -mountpoint "$MOUNT_POINT" "$LAYOUT_DMG" >/dev/null
 MOUNTED=1
 
-# macOS Tahoe ignores the legacy background alias emitted by dmgbuild. Let Finder
-# create its own native reference, then compress that configured writable image.
-if [[ ! -d "$MOUNT_POINT" ]]; then
-  echo "Obraz DMG nie został zamontowany w $MOUNT_POINT." >&2
-  exit 1
-fi
+# Store the native bookmark while the image is mounted on its own filesystem.
+xcrun swift -e '
+import Foundation
+let url = URL(fileURLWithPath: CommandLine.arguments[1])
+try url.bookmarkData().write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
+' "$MOUNT_POINT/.background/background.png" "$BUILD_DIR/background.bookmark"
 
-osascript <<APPLESCRIPT
-tell application "Finder"
-  set targetFolder to (POSIX file "$MOUNT_POINT" as alias)
-  open targetFolder
-  repeat 40 times
-    if exists disk "$VOLUME_NAME" then exit repeat
-    delay 0.25
-  end repeat
-  if not (exists disk "$VOLUME_NAME") then error "Finder nie zarejestrował woluminu $VOLUME_NAME."
-  tell disk "$VOLUME_NAME"
-    set w to container window
-    set current view of w to icon view
-    set toolbar visible of w to false
-    set statusbar visible of w to false
-    set bounds of w to {120, 120, 840, 578}
-    set v to icon view options of w
-    set icon size of v to 96
-    set text size of v to 12
-    set arrangement of v to not arranged
-    set background picture of v to (POSIX file "$MOUNT_POINT/.background/background.png" as alias)
-    set position of item "Szlauch.app" to {180, 263}
-    set position of item "Applications" to {540, 263}
-    update without registering applications
-    delay 1
-    close w
-  end tell
-end tell
-APPLESCRIPT
+"$DMGBUILD_VENV/bin/python" - "$MOUNT_POINT" "$BUILD_DIR/background.bookmark" <<'PY'
+from pathlib import Path
+import sys
+from ds_store import DSStore, DSStoreEntry
+from mac_alias import Alias
+
+root = Path(sys.argv[1])
+with DSStore.open(str(root / ".DS_Store"), "r+") as store:
+    view = store["."]["icvp"]
+    view["backgroundType"] = 2
+    view["backgroundImageAlias"] = Alias.for_file(str(root / ".background/background.png")).to_bytes()
+    store["."]["icvp"] = view
+    store.insert(DSStoreEntry(".", b"pBBk", b"blob", Path(sys.argv[2]).read_bytes()))
+PY
 
 sync
 cleanup_layout_volume

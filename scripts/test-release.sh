@@ -11,7 +11,9 @@ test -d "$APP_PATH"
 test -f "$DMG_PATH"
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-lipo "$APP_PATH/Contents/MacOS/Szlauch" -verify_arch arm64 x86_64
+for arch in arm64 x86_64; do
+  lipo "$APP_PATH/Contents/MacOS/Szlauch" -verify_arch "$arch"
+done
 zsh "$PROJECT_DIR/scripts/test-self.sh" "$APP_PATH"
 
 mkdir -p "$MOUNT_POINT"
@@ -28,7 +30,9 @@ test -d "$MOUNT_POINT/Szlauch.app"
 test -L "$MOUNT_POINT/Applications"
 test -f "$MOUNT_POINT/.background/background.png"
 codesign --verify --deep --strict --verbose=2 "$MOUNT_POINT/Szlauch.app"
-lipo "$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" -verify_arch arm64 x86_64
+for arch in arm64 x86_64; do
+  lipo "$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch" -verify_arch "$arch"
+done
 MOUNTED_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$MOUNT_POINT/Szlauch.app/Contents/Info.plist")"
 [[ "$MOUNTED_VERSION" == "$APP_VERSION" ]]
 cmp "$APP_PATH/Contents/MacOS/Szlauch" "$MOUNT_POINT/Szlauch.app/Contents/MacOS/Szlauch"
